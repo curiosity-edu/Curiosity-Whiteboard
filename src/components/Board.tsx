@@ -14,14 +14,18 @@ export default function Board() {
   // Loading state for the AI request
   const [loading, setLoading] = React.useState(false);
 
-  // AI panel state: list of responses shown as notifications
-  type AIItem = { id: string; text: string; ts: number };
+  // AI panel state: list of responses shown as notifications (AI-only display)
+  type AIItem = { id: string; text: string; ts: number; question?: string };
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
+  type HistoryItem = { question: string; response: string; ts: number };
+  const [archiveOpen, setArchiveOpen] = React.useState(false);
+  const [archive, setArchive] = React.useState<HistoryItem[] | null>(null);
 
-  function addAIItem(text: string) {
+  function addAIItem(text: string, question?: string) {
     const item: AIItem = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
+      question,
       ts: Date.now(),
     };
     setAiItems((prev) => [item, ...prev]);
@@ -29,6 +33,22 @@ export default function Board() {
 
   function removeAIItem(id: string) {
     setAiItems((prev) => prev.filter((x) => x.id !== id));
+  }
+
+  async function openArchive() {
+    setArchive(null);
+    try {
+      const res = await fetch("/api/history", { method: "GET" });
+      const j = await res.json();
+      const items = Array.isArray(j?.items) ? (j.items as HistoryItem[]) : [];
+      // newest first for consistency with panel
+      setArchive(items.slice().reverse());
+    } catch (e) {
+      console.error("[Archive] Failed to load:", e);
+      setArchive([]);
+    } finally {
+      setArchiveOpen(true);
+    }
   }
 
   /**
@@ -157,7 +177,8 @@ export default function Board() {
       }
 
       // Add to AI panel (notifications list)
-      addAIItem(finalText);
+      const questionText = (raw?.questionText ?? "").toString().trim();
+      addAIItem(finalText, questionText);
 
       // Calculate position for the response text (keep existing functionality)
       const b = getUnionBounds(editor, shapeIds);
@@ -201,7 +222,7 @@ export default function Board() {
 
       {/* AI Panel (right 1/4) */}
       <aside
-        className="w-1/4 min-w-[320px] max-w-[520px] h-full border-l border-neutral-200 bg-white flex flex-col"
+        className="relative w-1/4 min-w-[320px] max-w-[520px] h-full border-l border-neutral-200 bg-white flex flex-col"
         style={{ pointerEvents: "auto" }}
         aria-label="AI Panel"
       >
@@ -211,6 +232,13 @@ export default function Board() {
             AI
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={openArchive}
+              className="rounded-lg border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100"
+              title="Open archive"
+            >
+              Archive
+            </button>
             <button
               onClick={askAI}
               disabled={loading}
@@ -263,6 +291,55 @@ export default function Board() {
             ))
           )}
         </div>
+
+        {/* Archive overlay */}
+        {archiveOpen && (
+          <div className="absolute inset-0 bg-white/85 backdrop-blur-sm flex flex-col">
+            {/* Archive header */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 bg-white/90">
+              <div className="text-sm font-semibold text-neutral-700">Archive</div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setArchiveOpen(false)}
+                  className="rounded-lg border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100"
+                  title="Close archive"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            {/* Archive content */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-4">
+              {archive === null ? (
+                <div className="text-xs text-neutral-500">Loading…</div>
+              ) : archive.length === 0 ? (
+                <div className="text-xs text-neutral-500">No history yet.</div>
+              ) : (
+                archive.map((it, idx) => (
+                  <div key={it.ts + '-' + idx} className="space-y-2">
+                    <div className="text-[11px] text-neutral-400">
+                      {new Date(it.ts).toLocaleString()}
+                    </div>
+                    {/* Question bubble (right) */}
+                    {it.question && (
+                      <div className="flex justify-end">
+                        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-900 whitespace-pre-wrap">
+                          {it.question}
+                        </div>
+                      </div>
+                    )}
+                    {/* Response bubble (left) */}
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-50 border border-neutral-200 px-3 py-2 text-sm text-neutral-900 whitespace-pre-wrap">
+                        {it.response}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
       </aside>
     </div>
   );

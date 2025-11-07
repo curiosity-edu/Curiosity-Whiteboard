@@ -28,5 +28,15 @@
     "question": "What is the difference between the method you just explained vs newton's method",
     "response": "The bisection method is a bracketing method that requires two initial points with opposite signs and guarantees convergence, but it can be slow. Newton's method is an open method that uses the derivative to find successively better approximations of the root, often converging faster but requiring a good initial guess and the function to be differentiable.",
     "ts": 1762486274887
+  },
+  {
+    "question": "Solve (x^2 + 6x + 9) = 0",
+    "response": "x^2 + 6x + 9 = 0\n(x + 3)^2 = 0\nx + 3 = 0\nx = -3",
+    "ts": 1762488335707
+  },
+  {
+    "question": "Solve (x^2 + 6x + 9) = 0",
+    "response": "x^2 + 6x + 9 = 0\n(x + 3)^2 = 0\nx + 3 = 0\nx = -3",
+    "ts": 1762488396476
   }
 ]

@@ -150,12 +150,13 @@ export async function POST(req: NextRequest) {
       // do not fail the request if history persistence fails
     }
 
-    // Return the structured response
+    // Return the structured response (include questionText for UI archive)
     return json(200, { 
       message, 
       answerPlain, 
       answerLatex, 
-      explanation 
+      explanation,
+      questionText,
     });
     
   } catch (err: any) {
