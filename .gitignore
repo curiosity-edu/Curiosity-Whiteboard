@@ -41,4 +41,4 @@ yarn-error.log*
 next-env.d.ts
 
 # data
-data/solve_history.json
+data/
