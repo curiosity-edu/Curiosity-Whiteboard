@@ -21,28 +21,32 @@ function json(status: number, data: unknown) {
 
 // File path for persisted conversation history
 const HISTORY_FILE = path.join(process.cwd(), "data", "solve_history.json");
-
 type HistoryItem = { question: string; response: string; ts: number };
+type Session = { id: string; title: string; createdAt: number; updatedAt: number; items: HistoryItem[] };
+type HistoryFileShape = { sessions: Session[] };
 
 async function ensureHistoryDir() {
   await fs.mkdir(path.dirname(HISTORY_FILE), { recursive: true });
 }
 
-async function readHistory(): Promise<HistoryItem[]> {
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function readHistory(): Promise<HistoryFileShape> {
   try {
     await ensureHistoryDir();
     const buf = await fs.readFile(HISTORY_FILE, "utf8");
     const data = JSON.parse(buf);
-    if (Array.isArray(data)) return data as HistoryItem[];
-    return [];
+    return data as HistoryFileShape;
   } catch {
-    return [];
+    return { sessions: [] } as HistoryFileShape;
   }
 }
 
-async function writeHistory(items: HistoryItem[]) {
+async function writeHistoryFile(shape: HistoryFileShape) {
   await ensureHistoryDir();
-  await fs.writeFile(HISTORY_FILE, JSON.stringify(items, null, 2), "utf8");
+  await fs.writeFile(HISTORY_FILE, JSON.stringify(shape, null, 2), "utf8");
 }
 
 /**
@@ -58,6 +62,8 @@ export async function POST(req: NextRequest) {
     // Parse the form data containing the image
     const form = await req.formData();
     const file = form.get("image");
+    const sessionIdRaw = form.get("sessionId");
+    const sessionId = (typeof sessionIdRaw === "string" ? sessionIdRaw : undefined) || makeId();
     
     // Validate the uploaded file
     if (!(file instanceof File)) return json(400, { error: "No 'image' file in form-data." });
@@ -70,9 +76,15 @@ export async function POST(req: NextRequest) {
     // Convert the image to a data URL for the OpenAI API
     const dataUrl = `data:${file.type};base64,${Buffer.from(arr).toString("base64")}`;
     
-    // Read prior conversation history and stringify for context
-    const history = await readHistory();
-    const historyString = JSON.stringify(history);
+    // Read prior conversation history and stringify ONLY current session for context
+    const shape = await readHistory();
+    let sessions: Session[] = Array.isArray((shape as any).sessions) ? (shape as any).sessions : [];
+    const existingIdx = sessions.findIndex((s) => s.id === sessionId);
+    const currentSession: Session =
+      existingIdx >= 0
+        ? sessions[existingIdx]
+        : { id: sessionId, title: "", createdAt: Date.now(), updatedAt: Date.now(), items: [] };
+    const historyString = JSON.stringify(currentSession.items);
 
     // Initialize the OpenAI client
     const client = new OpenAI({ apiKey });
@@ -96,7 +108,10 @@ export async function POST(req: NextRequest) {
             "Prefer plain text math like 2x^2 + 7x + 5 = 0; use LaTeX fragments only when clearer.\n" +
             "Keep within ~120 words unless the image explicitly asks for detailed explanation.\n" +
             "You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.\n" +
-            "Return ONLY valid JSON of the form: { \"message\": \"<final response text>\", \"question_text\": \"<your best transcription of the question from the image>\" }.",
+            "Return ONLY valid JSON with keys: \n" +
+            "- message: <final response text>\n" +
+            "- question_text: <your best transcription of the question from the image>\n" +
+            "- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case).",
         },
         {
           role: "user",
@@ -106,7 +121,7 @@ export async function POST(req: NextRequest) {
               text:
                 "Here is the prior history as JSON. Use it as context: " + historyString +
                 "\nNow read the math in this image and respond using the rules above. " +
-                "Return ONLY JSON: { \"message\": \"<final response text>\", \"question_text\": \"<transcribed question text>\" }",
+                "Return ONLY JSON with the keys described above.",
             },
             { type: "image_url", image_url: { url: dataUrl } } as any,
           ],
@@ -130,6 +145,7 @@ export async function POST(req: NextRequest) {
     // Extract and clean the main message
     const message = (parsed?.message ?? "").toString().trim();
     const questionText = (parsed?.question_text ?? "").toString().trim();
+    let sessionTitleFromModel = (parsed?.session_title ?? "").toString().trim();
 
     // Extract any additional fields that might be present in the response
     // These are included for backward compatibility with different response formats
@@ -137,26 +153,56 @@ export async function POST(req: NextRequest) {
     const answerLatex = (parsed?.answer_latex ?? "").toString().trim();
     const explanation = (parsed?.explanation ?? "").toString().trim();
 
-    // Persist history with new entry (append in order)
+    // Persist history with new entry (append in order) to the current session only
     try {
-      const newHistory: HistoryItem[] = history.concat({
-        question: questionText,
-        response: message,
-        ts: Date.now(),
-      });
-      await writeHistory(newHistory);
+      const now = Date.now();
+      const entry: HistoryItem = { question: questionText, response: message, ts: now };
+      if (existingIdx >= 0) {
+        const next = { ...sessions[existingIdx] };
+        next.items = [...next.items, entry];
+        next.updatedAt = now;
+        sessions = [...sessions];
+        sessions[existingIdx] = next;
+      } else {
+        // create new session, with title possibly from model
+        let title = sessionTitleFromModel;
+        if (!title) {
+          // Small follow-up call to name the session from the question text
+          try {
+            const nameRsp = await client.chat.completions.create({
+              model: MODEL,
+              temperature: 0,
+              response_format: { type: "json_object" } as any,
+              messages: [
+                { role: "system", content: "Return ONLY valid JSON: { \"title\": \"<2-3 word descriptive title in Title Case>\" }" },
+                { role: "user", content: `Propose a 2-3 word session title for this question: ${questionText}` },
+              ],
+            });
+            const nameRaw = nameRsp.choices?.[0]?.message?.content?.trim() || "";
+            try {
+              const nameParsed = JSON.parse(nameRaw);
+              title = (nameParsed?.title ?? "").toString().trim();
+            } catch {}
+          } catch {}
+        }
+        if (!title) title = "New Session";
+        const newSession: Session = { ...currentSession, title, items: [entry], updatedAt: now };
+        sessions = [newSession, ...sessions];
+      }
+      await writeHistoryFile({ sessions });
     } catch (e) {
       console.error("failed to write solve history:", e);
       // do not fail the request if history persistence fails
     }
 
-    // Return the structured response (include questionText for UI archive)
+    // Return the structured response (include questionText and sessionId for UI)
     return json(200, { 
       message, 
       answerPlain, 
       answerLatex, 
       explanation,
       questionText,
+      sessionId,
     });
     
   } catch (err: any) {

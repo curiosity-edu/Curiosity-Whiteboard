@@ -13,13 +13,27 @@ export default function Board() {
   const editorRef = React.useRef<Editor | null>(null);
   // Loading state for the AI request
   const [loading, setLoading] = React.useState(false);
+  // Session id (new each page load)
+  const sessionIdRef = React.useRef<string>("");
+  React.useEffect(() => {
+    if (!sessionIdRef.current) {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      sessionIdRef.current = id;
+    }
+  }, []);
 
   // AI panel state: list of responses shown as notifications (AI-only display)
   type AIItem = { id: string; text: string; ts: number; question?: string };
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
   type HistoryItem = { question: string; response: string; ts: number };
-  const [archiveOpen, setArchiveOpen] = React.useState(false);
+  type SessionMeta = { id: string; title: string; createdAt: number; updatedAt: number; count: number };
+  const [historyOpen, setHistoryOpen] = React.useState(false);
+  const [historyMode, setHistoryMode] = React.useState<"list" | "session">("list");
+  const [sessions, setSessions] = React.useState<SessionMeta[] | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = React.useState<string | null>(null);
   const [archive, setArchive] = React.useState<HistoryItem[] | null>(null);
+  const [sessionTitle, setSessionTitle] = React.useState<string>("");
+  const historyScrollRef = React.useRef<HTMLDivElement | null>(null);
 
   function addAIItem(text: string, question?: string) {
     const item: AIItem = {
@@ -35,21 +49,52 @@ export default function Board() {
     setAiItems((prev) => prev.filter((x) => x.id !== id));
   }
 
-  async function openArchive() {
+  async function openHistory() {
+    setSessions(null);
     setArchive(null);
+    setHistoryMode("list");
+    setSelectedSessionId(null);
     try {
       const res = await fetch("/api/history", { method: "GET" });
       const j = await res.json();
-      const items = Array.isArray(j?.items) ? (j.items as HistoryItem[]) : [];
-      // newest first for consistency with panel
-      setArchive(items.slice().reverse());
+      const list = Array.isArray(j?.sessions) ? (j.sessions as SessionMeta[]) : [];
+      setSessions(list);
     } catch (e) {
-      console.error("[Archive] Failed to load:", e);
-      setArchive([]);
+      console.error("[History] Failed to load sessions:", e);
+      setSessions([]);
     } finally {
-      setArchiveOpen(true);
+      setHistoryOpen(true);
     }
   }
+
+  async function openSession(id: string) {
+    setSelectedSessionId(id);
+    setArchive(null);
+    setHistoryMode("session");
+    try {
+      const res = await fetch(`/api/history?sessionId=${encodeURIComponent(id)}`);
+      const j = await res.json();
+      const items = Array.isArray(j?.items) ? (j.items as HistoryItem[]) : [];
+      // Oldest -> newest
+      items.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      setArchive(items);
+      setSessionTitle((j?.title ?? "").toString());
+    } catch (e) {
+      console.error("[History] Failed to load session:", e);
+      setArchive([]);
+    }
+  }
+
+  // Auto-scroll to bottom when viewing a session
+  React.useEffect(() => {
+    if (historyMode === "session" && historyScrollRef.current && archive) {
+      const el = historyScrollRef.current;
+      // defer to next frame to allow layout
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
+    }
+  }, [historyMode, archive]);
 
   /**
    * Callback when the Tldraw editor mounts
@@ -150,6 +195,7 @@ export default function Board() {
       // Prepare the image for sending to the API
       const fd = new FormData();
       fd.append("image", new File([blob], "board.png", { type: "image/png" }));
+      if (sessionIdRef.current) fd.append("sessionId", sessionIdRef.current);
 
       // Send the image to the solve API
       const res = await fetch("/api/solve", { method: "POST", body: fd });
@@ -233,11 +279,11 @@ export default function Board() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={openArchive}
+              onClick={openHistory}
               className="rounded-lg border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100"
-              title="Open archive"
+              title="Open history"
             >
-              Archive
+              History
             </button>
             <button
               onClick={askAI}
@@ -293,51 +339,87 @@ export default function Board() {
         </div>
 
         {/* Archive overlay */}
-        {archiveOpen && (
+        {historyOpen && (
           <div className="absolute inset-0 bg-white/85 backdrop-blur-sm flex flex-col">
-            {/* Archive header */}
+            {/* History header */}
             <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 bg-white/90">
-              <div className="text-sm font-semibold text-neutral-700">Archive</div>
+              <div className="text-sm font-semibold text-neutral-700">History</div>
               <div className="flex items-center gap-2">
+                {historyMode === "session" && (
+                  <button
+                    onClick={() => setHistoryMode("list")}
+                    className="rounded-lg border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100"
+                    title="Back to sessions"
+                  >
+                    Sessions
+                  </button>
+                )}
                 <button
-                  onClick={() => setArchiveOpen(false)}
+                  onClick={() => setHistoryOpen(false)}
                   className="rounded-lg border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100"
-                  title="Close archive"
+                  title="Close history"
                 >
                   Close
                 </button>
               </div>
             </div>
-            {/* Archive content */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-4">
-              {archive === null ? (
-                <div className="text-xs text-neutral-500">Loading…</div>
-              ) : archive.length === 0 ? (
-                <div className="text-xs text-neutral-500">No history yet.</div>
-              ) : (
-                archive.map((it, idx) => (
-                  <div key={it.ts + '-' + idx} className="space-y-2">
-                    <div className="text-[11px] text-neutral-400">
-                      {new Date(it.ts).toLocaleString()}
-                    </div>
-                    {/* Question bubble (right) */}
-                    {it.question && (
-                      <div className="flex justify-end">
-                        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-900 whitespace-pre-wrap">
-                          {it.question}
+            {/* History content */}
+            {historyMode === "list" ? (
+              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                {sessions === null ? (
+                  <div className="text-xs text-neutral-500">Loading…</div>
+                ) : sessions.length === 0 ? (
+                  <div className="text-xs text-neutral-500">No sessions yet.</div>
+                ) : (
+                  sessions.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => openSession(s.id)}
+                      className="w-full text-left rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 px-3 py-2 shadow-sm"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-medium text-neutral-800 truncate">{s.title || s.id}</div>
+                        <div className="text-[11px] text-neutral-500">{new Date(s.updatedAt).toLocaleString()}</div>
+                      </div>
+                      <div className="text-xs text-neutral-500">{s.count} message{s.count === 1 ? "" : "s"}</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : (
+              <div ref={historyScrollRef} className="flex-1 overflow-y-auto p-3 space-y-4">
+                {sessionTitle && (
+                  <div className="text-xs text-neutral-500 px-1">Session: {sessionTitle}</div>
+                )}
+                {archive === null ? (
+                  <div className="text-xs text-neutral-500">Loading…</div>
+                ) : archive.length === 0 ? (
+                  <div className="text-xs text-neutral-500">No messages yet.</div>
+                ) : (
+                  archive.map((it, idx) => (
+                    <div key={it.ts + '-' + idx} className="space-y-2">
+                      <div className="text-[11px] text-neutral-400">
+                        {new Date(it.ts).toLocaleString()}
+                      </div>
+                      {/* Question bubble (right) */}
+                      {it.question && (
+                        <div className="flex justify-end">
+                          <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-900 whitespace-pre-wrap">
+                            {it.question}
+                          </div>
+                        </div>
+                      )}
+                      {/* Response bubble (left) */}
+                      <div className="flex justify-start">
+                        <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-50 border border-neutral-200 px-3 py-2 text-sm text-neutral-900 whitespace-pre-wrap">
+                          {it.response}
                         </div>
                       </div>
-                    )}
-                    {/* Response bubble (left) */}
-                    <div className="flex justify-start">
-                      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-50 border border-neutral-200 px-3 py-2 text-sm text-neutral-900 whitespace-pre-wrap">
-                        {it.response}
-                      </div>
                     </div>
-                  </div>
-                ))
-              )}
-            </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         )}
       </aside>
