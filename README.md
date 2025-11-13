@@ -62,55 +62,94 @@ You must decide the response style from the problem itself:
 
 Response format policy:
 - DO NOT use LaTeX/TeX markup or commands (no \\frac, \\sec, \\tan, $$, \[, \], or \( \))
-- Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √)
+- Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹)
 - Use function names like sec(x), tan(x)
-- For powers or fractions, prefer caret and slash (e.g., x^2, (a+b)/2) if needed
+- For fractions, use a slash (e.g., (a+b)/2) if needed
 - Keep the output readable as normal text
 - Keep within ~120 words unless the image explicitly asks for detailed explanation
 - Use prior conversation history (provided as JSON) only as context; do not repeat it
 
-Return ONLY valid JSON with these keys:
-- message: <final response text>
-- question_text: <your best transcription of the question from the image>
-- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case)
-```
+## Program Flow
 
-## Program Flow (End-to-End)
+### 1. User Interaction
+- User selects shapes or the entire canvas on the whiteboard
+- User clicks the "Ask AI" button in the toolbar
+- The selection is captured as a PNG image
 
-1. User selects shapes or entire canvas and clicks “Ask AI”.
-2. `Board.askAI()` exports a PNG of the selection, posts to `/api/solve` with `sessionId`.
-3. `POST /api/solve` reads the current session, sends the image and context to OpenAI, parses JSON, and persists the new entry.
-4. Client receives `{ message, questionText, sessionId }`.
-5. UI:
-   - Adds a notification card with the AI response in the right panel.
-   - Creates a text shape with the AI response on the canvas near the selection.
-6. History overlay:
-   - Sessions list via `GET /api/history`.
-   - Per-session messages via `GET /api/history?sessionId=...`.
+### 2. Client-Side Processing (`Board.askAI()` in `Board.tsx`)
+- Exports the selected area as a PNG image
+- If no shapes are selected, captures the entire canvas
+- Retrieves or generates a `sessionId` (stored in localStorage)
+- Shows a loading state in the AI panel
+- Makes a POST request to `/api/solve` with:
+  - `image`: The PNG image data
+  - `sessionId`: Current session identifier
 
-## Public Interfaces (API Contracts)
+### 3. Server-Side Processing (`/api/solve` endpoint)
+- Validates the request and authentication
+- Reads the existing session history from `data/solve_history.json`
+- If `sessionId` is new, creates a new session entry
+- Sends the image and conversation history to OpenAI's API with specific formatting instructions
+- Uses GPT-4 with vision capabilities
+- Includes system prompt for response formatting
+- Provides conversation history as context
+- Requests JSON response with specific structure
 
-- `POST /api/solve`
-  - Request: `multipart/form-data` with fields:
-    - `image`: PNG image (required)
-    - `sessionId`: string (optional; if omitted, server generates one)
-  - Response JSON:
-    - `message: string` – natural text answer (no LaTeX)
-    - `questionText: string` – model’s transcription of the input question
-    - `sessionId: string` – active session ID that was used or created
-    - `answerPlain`, `answerLatex`, `explanation` – optional legacy fields (kept for flexibility)
+### 4. AI Processing (OpenAI API)
+- Analyzes the image using vision capabilities
+- Processes any text in the image
+- Generates a response following the format guidelines:
+  - Uses Unicode for mathematical notation (e.g., x², √3, ¼)
+  - Structures response based on whether explanation is requested
+  - Returns a JSON object with `message` and `question_text`
 
-– `GET /api/history`
-  - Response JSON: `{ sessions: Array<{ id, title, createdAt, updatedAt, count }> }`
+### 5. Response Handling
+- Server receives and validates the AI response
+- Updates the session history with the new Q&A pair
+- Persists the updated history to `data/solve_history.json`
+- Returns JSON response to the client:
+  ```json
+  {
+    "message": "AI response text with formatted math",
+    "questionText": "Extracted question from the image",
+    "sessionId": "current-session-id",
+    "sessionTitle": "Optional session title"
+  }
+  ```
 
-– `GET /api/history?sessionId=...`
-  - Response JSON: `{ items: Array<{ question, response, ts }>, title: string }`
+### 6. Client-Side Update
+- Updates the AI panel with the response:
+  - Adds a new notification card with the response
+  - Formats the response with proper math notation
+  - Updates the session title if this is the first message
+- Creates a text shape on the canvas:
+  - Positions it near the original selection
+  - Applies appropriate styling for AI responses
+  - Makes it selectable and movable
+- Updates the history panel with the new interaction
+
+### 7. History Management
+- Sessions list view (`GET /api/history`):
+  - Returns metadata for all sessions
+  - Includes title, timestamp, and preview of last message
+- Session details (`GET /api/history?sessionId=...`):
+  - Returns full conversation history for a specific session
+  - Includes all Q&A pairs with timestamps
+- Persistence:
+  - All data stored in `data/solve_history.json`
+  - File is read/written on each request (simple file-based storage)
+  - For production, consider using a database
+
+### 8. Error Handling
+- Network errors: Shows user-friendly error message in the AI panel
+- API errors: Displays the error message from the server
+- Invalid responses: Falls back to plain text display if JSON parsing fails
+- Rate limiting: Implements exponential backoff for retries
 
 ## Styling & UX Notes
 
 - Panel is the right quarter of the screen. Notifications are dismissible cards.
 - History overlay is a full-height overlay over the panel. Message bubbles are styled like a chat: question right, answer left.
-- Panel itself is read-only (no inputs apart from buttons).
 - The canvas text created by answers uses `toRichText(finalText)` with a fixed width for readability.
 
 ## Development Tips

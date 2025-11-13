@@ -105,15 +105,15 @@ export async function POST(req: NextRequest) {
             "  provide a natural, concise explanation: start with the result, then 2–4 short sentences that explain how.\n" +
             "- Otherwise, return a work-only solution: a sequence of line-by-line algebraic transformations with minimal labels (<= 6 words). " +
             "  No paragraphs, no extra commentary. Finish with the final answer on the last line.\n" +
-            "Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\\\frac, \\\\sec, \\\\tan, $$, \\[, \\], or \\( \\)). " +
-            "Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √), and function names like sec(x), tan(x). " +
-            "When writing powers or fractions, prefer caret and slash (e.g., x^2, (a+b)/2) if needed. Keep the output readable as normal text.\n" +
+            "Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\\\frac, \\\\sec, \\\\tan, $$, \\[, \\], or \\( \\\)). " +
+            "Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹), and function names like sec(x), tan(x). " +
+            "When writing powers, use Unicode superscripts (e.g., x², x³) instead of caret notation. For fractions, use a slash (e.g., (a+b)/2) if needed. Keep the output readable as normal text.\n" +
             "Keep within ~120 words unless the image explicitly asks for detailed explanation.\n" +
             "You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.\n" +
             "Return ONLY valid JSON with keys: \n" +
             "- message: <final response text>\n" +
             "- question_text: <your best transcription of the question from the image>\n" +
-            "- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case).",
+            "- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case)."
         },
         {
           role: "user",
