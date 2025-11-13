@@ -105,7 +105,9 @@ export async function POST(req: NextRequest) {
             "  provide a natural, concise explanation: start with the result, then 2–4 short sentences that explain how.\n" +
             "- Otherwise, return a work-only solution: a sequence of line-by-line algebraic transformations with minimal labels (<= 6 words). " +
             "  No paragraphs, no extra commentary. Finish with the final answer on the last line.\n" +
-            "Prefer plain text math like 2x^2 + 7x + 5 = 0; use LaTeX fragments only when clearer.\n" +
+            "Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\\\frac, \\\\sec, \\\\tan, $$, \\[, \\], or \\( \\)). " +
+            "Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √), and function names like sec(x), tan(x). " +
+            "When writing powers or fractions, prefer caret and slash (e.g., x^2, (a+b)/2) if needed. Keep the output readable as normal text.\n" +
             "Keep within ~120 words unless the image explicitly asks for detailed explanation.\n" +
             "You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.\n" +
             "Return ONLY valid JSON with keys: \n" +
@@ -121,6 +123,7 @@ export async function POST(req: NextRequest) {
               text:
                 "Here is the prior history as JSON. Use it as context: " + historyString +
                 "\nNow read the math in this image and respond using the rules above. " +
+                "Important: write your response as natural text with inline math, not LaTeX/TeX. No backslashes or TeX commands. " +
                 "Return ONLY JSON with the keys described above.",
             },
             { type: "image_url", image_url: { url: dataUrl } } as any,
