@@ -26,11 +26,21 @@ export default function Board() {
   type AIItem = { id: string; text: string; ts: number; question?: string };
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
   type HistoryItem = { question: string; response: string; ts: number };
-  type SessionMeta = { id: string; title: string; createdAt: number; updatedAt: number; count: number };
+  type SessionMeta = {
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+    count: number;
+  };
   const [historyOpen, setHistoryOpen] = React.useState(false);
-  const [historyMode, setHistoryMode] = React.useState<"list" | "session">("list");
+  const [historyMode, setHistoryMode] = React.useState<"list" | "session">(
+    "list"
+  );
   const [sessions, setSessions] = React.useState<SessionMeta[] | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = React.useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = React.useState<
+    string | null
+  >(null);
   const [archive, setArchive] = React.useState<HistoryItem[] | null>(null);
   const [sessionTitle, setSessionTitle] = React.useState<string>("");
   const historyScrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -72,7 +82,9 @@ export default function Board() {
     try {
       const res = await fetch("/api/history", { method: "GET" });
       const j = await res.json();
-      const list = Array.isArray(j?.sessions) ? (j.sessions as SessionMeta[]) : [];
+      const list = Array.isArray(j?.sessions)
+        ? (j.sessions as SessionMeta[])
+        : [];
       setSessions(list);
     } catch (e) {
       console.error("[History] Failed to load sessions:", e);
@@ -87,7 +99,9 @@ export default function Board() {
     setArchive(null);
     setHistoryMode("session");
     try {
-      const res = await fetch(`/api/history?sessionId=${encodeURIComponent(id)}`);
+      const res = await fetch(
+        `/api/history?sessionId=${encodeURIComponent(id)}`
+      );
       const j = await res.json();
       const items = Array.isArray(j?.items) ? (j.items as HistoryItem[]) : [];
       // Oldest -> newest
@@ -122,7 +136,7 @@ export default function Board() {
       editor.updateInstanceState({ isReadonly: false });
     } catch {}
     console.log("[Board] Editor mounted:", editor);
-  }, [addToCanvas]);
+  }, []); // Fixed: removed addToCanvas from dependencies
 
   /**
    * Calculates the bounding box that contains all specified shapes
@@ -155,7 +169,12 @@ export default function Board() {
       if (y + h > maxY) maxY = y + h;
     }
 
-    if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY))
+    if (
+      !isFinite(minX) ||
+      !isFinite(minY) ||
+      !isFinite(maxX) ||
+      !isFinite(maxY)
+    )
       return null;
 
     return {
@@ -241,9 +260,19 @@ export default function Board() {
       const questionText = (raw?.questionText ?? "").toString().trim();
       addAIItem(finalText, questionText);
 
+      // Read the current value of addToCanvas from localStorage to ensure we have the latest value
+      console.log("here");
+      let shouldAddToCanvas = addToCanvas;
+      try {
+        const stored = localStorage.getItem("addToCanvas");
+        shouldAddToCanvas = stored ? stored === "true" : true;
+      } catch {}
+      console.log("Right before check for addToCanvas: ", shouldAddToCanvas);
       // Optionally create a text shape with the AI response on the canvas
-      if (addToCanvas) {
-        // Calculate position for the response text (keep existing functionality)
+      if (shouldAddToCanvas) {
+
+        console.log("[Board] Adding AI response to canvas:", finalText);
+        // Calculate position for the response text
         const b = getUnionBounds(editor, shapeIds);
         let x: number, y: number;
         if (b) {
@@ -274,7 +303,7 @@ export default function Board() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [addToCanvas]); // Fixed: added addToCanvas to dependencies
 
   return (
     <div className="flex h-screen w-screen overflow-hidden">
@@ -295,7 +324,10 @@ export default function Board() {
             AI
           </div>
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-1 text-xs text-neutral-700" title="Also place the AI response onto the canvas">
+            <label
+              className="flex items-center gap-1 text-xs text-neutral-700"
+              title="Also place the AI response onto the canvas"
+            >
               <input
                 type="checkbox"
                 className="accent-blue-600"
@@ -369,7 +401,9 @@ export default function Board() {
           <div className="absolute inset-0 bg-white/85 backdrop-blur-sm flex flex-col">
             {/* History header */}
             <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 bg-white/90">
-              <div className="text-sm font-semibold text-neutral-700">History</div>
+              <div className="text-sm font-semibold text-neutral-700">
+                History
+              </div>
               <div className="flex items-center gap-2">
                 {historyMode === "session" && (
                   <button
@@ -395,7 +429,9 @@ export default function Board() {
                 {sessions === null ? (
                   <div className="text-xs text-neutral-500">Loading…</div>
                 ) : sessions.length === 0 ? (
-                  <div className="text-xs text-neutral-500">No sessions yet.</div>
+                  <div className="text-xs text-neutral-500">
+                    No sessions yet.
+                  </div>
                 ) : (
                   sessions.map((s) => (
                     <button
@@ -404,26 +440,39 @@ export default function Board() {
                       className="w-full text-left rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 px-3 py-2 shadow-sm"
                     >
                       <div className="flex items-center justify-between">
-                        <div className="text-sm font-medium text-neutral-800 truncate">{s.title || s.id}</div>
-                        <div className="text-[11px] text-neutral-500">{new Date(s.updatedAt).toLocaleString()}</div>
+                        <div className="text-sm font-medium text-neutral-800 truncate">
+                          {s.title || s.id}
+                        </div>
+                        <div className="text-[11px] text-neutral-500">
+                          {new Date(s.updatedAt).toLocaleString()}
+                        </div>
                       </div>
-                      <div className="text-xs text-neutral-500">{s.count} message{s.count === 1 ? "" : "s"}</div>
+                      <div className="text-xs text-neutral-500">
+                        {s.count} message{s.count === 1 ? "" : "s"}
+                      </div>
                     </button>
                   ))
                 )}
               </div>
             ) : (
-              <div ref={historyScrollRef} className="flex-1 overflow-y-auto p-3 space-y-4">
+              <div
+                ref={historyScrollRef}
+                className="flex-1 overflow-y-auto p-3 space-y-4"
+              >
                 {sessionTitle && (
-                  <div className="text-xs text-neutral-500 px-1">Session: {sessionTitle}</div>
+                  <div className="text-xs text-neutral-500 px-1">
+                    Session: {sessionTitle}
+                  </div>
                 )}
                 {archive === null ? (
                   <div className="text-xs text-neutral-500">Loading…</div>
                 ) : archive.length === 0 ? (
-                  <div className="text-xs text-neutral-500">No messages yet.</div>
+                  <div className="text-xs text-neutral-500">
+                    No messages yet.
+                  </div>
                 ) : (
                   archive.map((it, idx) => (
-                    <div key={it.ts + '-' + idx} className="space-y-2">
+                    <div key={it.ts + "-" + idx} className="space-y-2">
                       <div className="text-[11px] text-neutral-400">
                         {new Date(it.ts).toLocaleString()}
                       </div>
