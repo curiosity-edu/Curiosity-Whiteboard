@@ -1,5 +1,10 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Live Site
+
+- Primary: https://whiteboard-ai-v1-j6mx-git-main-shlok-rathis-projects-d1144ddc.vercel.app/
+- Custom domain (if DNS configured): https://curiosity-edu.org
+
 ## Getting Started
 
 First, run the development server:
@@ -31,13 +36,15 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Data Model
 
-- `data/solve_history.json`
+- File: `data/solve_history.json`
+- Shape: Boards (no nested sessions). Each board is a single conversation timeline.
+
 ```jsonc
 {
-  "sessions": [
+  "boards": [
     {
       "id": "1731520123456-abc12345",
-      "title": "Quadratic Roots",            // Provided by model or follow-up naming call
+      "title": "Algebra Practice",          // Provided by user at creation time
       "createdAt": 1731520123456,
       "updatedAt": 1731520456789,
       "items": [
@@ -48,6 +55,8 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
   ]
 }
 ```
+
+- Migration: legacy `{"sessions": [...]}` is treated as `boards` for backward compatibility in the API.
 ## Prompting Rules
 
 ### System Prompt
@@ -81,74 +90,38 @@ Return ONLY JSON with the keys described above.
 
 ## Program Flow
 
-### 1. User Interaction
-- User selects shapes or the entire canvas on the whiteboard
-- User clicks the "Ask AI" button in the toolbar
-- The selection is captured as a PNG image
+### 0. Landing and Navigation
+- User lands at `GET /` → redirected to `GET /boards`.
+- `My Boards` page lists all boards from `GET /api/boards` with newest updated first.
+- User can click `New Board` → goes to `/boards/new`, enters a title, `POST /api/boards` creates a board, then redirects to `/board/[id]`.
 
-### 2. Client-Side Processing (`Board.askAI()` in `Board.tsx`)
-- Exports the selected area as a PNG image
-- If no shapes are selected, captures the entire canvas
-- Retrieves or generates a `sessionId` (stored in localStorage)
-- Shows a loading state in the AI panel
-- Makes a POST request to `/api/solve` with:
-  - `image`: The PNG image data
-  - `sessionId`: Current session identifier
+### 1. Board View (`/board/[id]`)
+- Renders `Board` with a required `boardId` prop.
+- Left: TLDraw canvas fills available height; bottom toolbar always visible.
+- Right: AI Panel with controls (Ask AI, Add to Canvas, History).
 
-### 3. Server-Side Processing (`/api/solve` endpoint)
-- Validates the request and authentication
-- Reads the existing session history from `data/solve_history.json`
-- If `sessionId` is new, creates a new session entry
-- Sends the image and conversation history to OpenAI's API with specific formatting instructions
-- Uses GPT-4 with vision capabilities
-- Includes system prompt for response formatting
-- Provides conversation history as context
-- Requests JSON response with specific structure
+### 2. Ask AI (client in `src/components/Board.tsx`)
+- Collects selected shapes (or all shapes if none) and exports as PNG (with padding, scale).
+- Constructs `FormData` with `image` and `boardId`.
+- `POST /api/solve` is called; loading state is shown.
 
-### 4. AI Processing (OpenAI API)
-- Analyzes the image using vision capabilities
-- Processes any text in the image
-- Generates a response following the format guidelines (see prompting rules)
+### 3. Solve API (server in `src/app/api/solve/route.ts`)
+- Validates the upload and reads current board items from `data/solve_history.json`.
+- Sends the image and the board's prior items as JSON context to OpenAI with the system prompt.
+- Receives JSON `{ message, question_text, ... }`.
+- Appends `{ question, response, ts }` to the specified board, updates `updatedAt`, and persists to file.
+- Returns `{ message, questionText, boardId, ... }` to the client.
 
-### 5. Response Handling
-- Server receives and validates the AI response
-- Updates the session history with the new Q&A pair
-- Persists the updated history to `data/solve_history.json`
-- Returns JSON response to the client:
-  ```json
-  {
-    "message": "AI response text with formatted math",
-    "questionText": "Extracted question from the image",
-    "sessionId": "current-session-id",
-    "sessionTitle": "Optional session title"
-  }
-  ```
+### 4. Client Update (Board)
+- Shows the AI response in the AI Panel list (newest first).
+- If "Add to Canvas" is enabled, adds a TLDraw text shape below the selection with `toRichText(message)`.
+- History overlay can be opened to view the entire board conversation; reads `GET /api/boards/[id]`.
 
-### 6. Client-Side Update
-- Updates the AI panel with the response:
-  - Adds a new notification card with the response
-  - Formats the response with proper math notation
-  - Updates the session title if this is the first message
-- Conditionally creates a text shape on the canvas if "Add to Canvas" is enabled:
-  - Positions it near the original selection
-  - Applies appropriate styling for AI responses
-  - Makes it selectable and movable
-- Updates the history panel with the new interaction
-- Toggle state for "Add to Canvas" is persisted in localStorage
+### 5. Persistence
+- File-based store `data/solve_history.json` is read/written on each request.
+- In production, move to a real database (e.g., Firebase/Firestore) and associate boards to authenticated users.
 
-### 7. History Management
-- Sessions list view (`GET /api/history`):
-  - Returns metadata for all sessions
-  - Includes title, timestamp, and preview of last message
-- Session details (`GET /api/history?sessionId=...`):
-  - Returns full conversation history for a specific session
-  - Includes all Q&A pairs with timestamps
-- Persistence:
-  - All data stored in `data/solve_history.json`
-  - File is read/written on each request (simple file-based storage)
-  - For production, consider using a database
-
-### 8. Error Handling
+### 6. Error Handling
 - Network errors: Shows user-friendly error message in the AI panel
 - API errors: Displays the error message from the server
 - Invalid responses: Falls back to plain text display if JSON parsing fails
@@ -156,10 +129,28 @@ Return ONLY JSON with the keys described above.
 
 ## Styling & UX Notes
 
-- Panel is the right quarter of the screen. Notifications are dismissible cards.
-- History overlay is a full-height overlay over the panel. Message bubbles are styled like a chat: question right, answer left.
-- The canvas text created by answers uses `toRichText(finalText)` with a fixed width for readability.
-- The "Add to Canvas" toggle in the AI panel header allows users to control whether responses appear on the canvas.
+- **Header**: Sticky, solid white (`bg-white`) with full-bleed underline; left-aligned logo (`/public/textblack.png`) and nav links.
+- **Nav**: `My Boards` and `About Us`; active link is bold. `My Boards` highlights on `/boards` and `/board/*`.
+- **Layout**: The window itself does not scroll; the canvas and AI panel scroll internally. Main height is `calc(100vh - header)`.
+- **Canvas**: TLDraw fills its container (`absolute inset-0 bg-white`). Bottom toolbar is always visible; no clipping (`min-h-0` on flex parents).
+- **AI Panel**: Right column with header actions (Ask AI, Add to Canvas, History). Content is a vertical stack of cards; History overlay is opaque white.
+- **About page**: Full-width white background; content constrained to a readable column.
+
+## Source Files Overview
+
+- `src/app/layout.tsx` — Global layout (header with logo + `Nav`, sticky header, full-bleed underline, white background scaffolding).
+- `src/app/page.tsx` — Redirects `/` to `/boards`.
+- `src/app/boards/page.tsx` — Server component: lists boards via `GET /api/boards`, links to new and detail pages.
+- `src/app/boards/new/page.tsx` — Client page to create a new board (title input) and redirect to `/board/[id]`.
+- `src/app/board/[id]/page.tsx` — Server page that renders `<Board boardId={id} />`.
+- `src/components/Nav.tsx` — Client nav with active highlighting for `/boards` and `/board/*`, plus link to `/about`.
+- `src/components/Board.tsx` — Client TLDraw board + AI Panel. Sends `boardId` to `/api/solve`, shows responses, optional canvas insertion, and board History overlay.
+- `src/app/api/boards/route.ts` — `GET` list boards; `POST` create board (migrates legacy `sessions` → `boards`).
+- `src/app/api/boards/[id]/route.ts` — `GET` a single board (id, title, items).
+- `src/app/api/solve/route.ts` — Accepts `image` + `boardId`, calls OpenAI, appends `{question,response,ts}` to the board, persists to file.
+- `src/app/api/history/route.ts` — Legacy sessions endpoint (kept temporarily; UI no longer calls it).
+- `src/app/globals.css` — Tailwind setup and theme tokens. Forces light background to avoid dark strips; sets body text color.
+- `public/textblack.png` — Logo used in the header and About page.
 
 ## Development Tips
 
@@ -167,8 +158,36 @@ Return ONLY JSON with the keys described above.
 - In serverless deployments, replace file persistence with durable storage.
 - If a provider occasionally returns stray LaTeX, we can add an optional server-side sanitizer to strip TeX commands as a last resort.
 
-## Future Enhancements (Next Action Items)
+## Action Items
 
-- Switch from localhost to using curiosity-edu.org website domain (publishing site)
-- Add Google authentication and establish Firebase schema for personalized user history
-- The screenshot of the selection should only include the user's new question, not the entire canvas (previous questions can be derived from conversation history)
+### Whiteboard-Related Functionality Items
+
+- **Before Next Meeting**
+  - Advaith: Double clicking card in AI panel should insert into canvas as text
+  - Shlok: Verify successful deployment to domain, other task forgotten during meeting
+
+- **Done (11/18/25)**
+  - Implemented the full “boards” model and UX: APIs, pages, Board component, nav, and routing. We can now manage multiple boards, each with a single conversation history, with new board titles collected from the user. Includes "My Boards" landing page.
+
+- **Next Meeting (11/20/25)**
+  - Implement Google Auth + Database Setup (Firebase) together
+
+- **After This**
+  - Adding model response to Canvas should size up to user writing size
+  - First principles prompting: Need 4 branches for hint/explanation (concept & algebraic)
+  - Ability to locate/highlight errors in work on whiteboard
+
+- **Deadline for Functionality Items**: 12/14/2025
+
+### UI Related Tasks
+
+- AI Panel doesn’t need to go all the way down (reduce height); stack alerts like WhatsApp messages
+- Write-out animation on whiteboard
+- “Ask AI” should be bigger and more colorful
+
+- **Deadline for UI Items**: End of break
+
+### Deployment
+
+- Send email to Srividya (Cascaida)
+- Send email to UW math professors
