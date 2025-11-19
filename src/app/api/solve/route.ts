@@ -19,11 +19,11 @@ function json(status: number, data: unknown) {
   return NextResponse.json(data, { status });
 }
 
-// File path for persisted conversation history
+// File path for persisted boards
 const HISTORY_FILE = path.join(process.cwd(), "data", "solve_history.json");
 type HistoryItem = { question: string; response: string; ts: number };
-type Session = { id: string; title: string; createdAt: number; updatedAt: number; items: HistoryItem[] };
-type HistoryFileShape = { sessions: Session[] };
+type Board = { id: string; title: string; createdAt: number; updatedAt: number; items: HistoryItem[] };
+type StoreShape = { boards: Board[] } | { sessions: any[] } | any;
 
 async function ensureHistoryDir() {
   await fs.mkdir(path.dirname(HISTORY_FILE), { recursive: true });
@@ -33,20 +33,27 @@ function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function readHistory(): Promise<HistoryFileShape> {
+async function readHistory(): Promise<StoreShape> {
   try {
     await ensureHistoryDir();
     const buf = await fs.readFile(HISTORY_FILE, "utf8");
     const data = JSON.parse(buf);
-    return data as HistoryFileShape;
+    return data as StoreShape;
   } catch {
-    return { sessions: [] } as HistoryFileShape;
+    return { boards: [] } as StoreShape;
   }
 }
 
-async function writeHistoryFile(shape: HistoryFileShape) {
+async function writeHistoryFile(shape: StoreShape) {
   await ensureHistoryDir();
   await fs.writeFile(HISTORY_FILE, JSON.stringify(shape, null, 2), "utf8");
+}
+
+function toBoards(shape: StoreShape): Board[] {
+  if (Array.isArray((shape as any).boards)) return (shape as any).boards as Board[];
+  // migrate legacy sessions -> boards seamlessly
+  if (Array.isArray((shape as any).sessions)) return (shape as any).sessions as Board[];
+  return [];
 }
 
 /**
@@ -62,8 +69,8 @@ export async function POST(req: NextRequest) {
     // Parse the form data containing the image
     const form = await req.formData();
     const file = form.get("image");
-    const sessionIdRaw = form.get("sessionId");
-    const sessionId = (typeof sessionIdRaw === "string" ? sessionIdRaw : undefined) || makeId();
+    const boardIdRaw = form.get("boardId") ?? form.get("sessionId"); // backward compat
+    const boardId = (typeof boardIdRaw === "string" ? boardIdRaw : undefined) || makeId();
     
     // Validate the uploaded file
     if (!(file instanceof File)) return json(400, { error: "No 'image' file in form-data." });
@@ -78,13 +85,13 @@ export async function POST(req: NextRequest) {
     
     // Read prior conversation history and stringify ONLY current session for context
     const shape = await readHistory();
-    let sessions: Session[] = Array.isArray((shape as any).sessions) ? (shape as any).sessions : [];
-    const existingIdx = sessions.findIndex((s) => s.id === sessionId);
-    const currentSession: Session =
+    let boards: Board[] = toBoards(shape);
+    const existingIdx = boards.findIndex((b) => b.id === boardId);
+    const currentBoard: Board =
       existingIdx >= 0
-        ? sessions[existingIdx]
-        : { id: sessionId, title: "", createdAt: Date.now(), updatedAt: Date.now(), items: [] };
-    const historyString = JSON.stringify(currentSession.items);
+        ? boards[existingIdx]
+        : { id: boardId, title: "", createdAt: Date.now(), updatedAt: Date.now(), items: [] };
+    const historyString = JSON.stringify(currentBoard.items);
 
     // Initialize the OpenAI client
     const client = new OpenAI({ apiKey });
@@ -148,7 +155,7 @@ export async function POST(req: NextRequest) {
     // Extract and clean the main message
     const message = (parsed?.message ?? "").toString().trim();
     const questionText = (parsed?.question_text ?? "").toString().trim();
-    let sessionTitleFromModel = (parsed?.session_title ?? "").toString().trim();
+    // We no longer use AI to name boards
 
     // Extract any additional fields that might be present in the response
     // These are included for backward compatibility with different response formats
@@ -156,56 +163,34 @@ export async function POST(req: NextRequest) {
     const answerLatex = (parsed?.answer_latex ?? "").toString().trim();
     const explanation = (parsed?.explanation ?? "").toString().trim();
 
-    // Persist history with new entry (append in order) to the current session only
+    // Persist history with new entry (append in order) to the current board only
     try {
       const now = Date.now();
       const entry: HistoryItem = { question: questionText, response: message, ts: now };
       if (existingIdx >= 0) {
-        const next = { ...sessions[existingIdx] };
+        const next = { ...boards[existingIdx] };
         next.items = [...next.items, entry];
         next.updatedAt = now;
-        sessions = [...sessions];
-        sessions[existingIdx] = next;
+        boards = [...boards];
+        boards[existingIdx] = next;
       } else {
-        // create new session, with title possibly from model
-        let title = sessionTitleFromModel;
-        if (!title) {
-          // Small follow-up call to name the session from the question text
-          try {
-            const nameRsp = await client.chat.completions.create({
-              model: MODEL,
-              temperature: 0,
-              response_format: { type: "json_object" } as any,
-              messages: [
-                { role: "system", content: "Return ONLY valid JSON: { \"title\": \"<2-3 word descriptive title in Title Case>\" }" },
-                { role: "user", content: `Propose a 2-3 word session title for this question: ${questionText}` },
-              ],
-            });
-            const nameRaw = nameRsp.choices?.[0]?.message?.content?.trim() || "";
-            try {
-              const nameParsed = JSON.parse(nameRaw);
-              title = (nameParsed?.title ?? "").toString().trim();
-            } catch {}
-          } catch {}
-        }
-        if (!title) title = "New Session";
-        const newSession: Session = { ...currentSession, title, items: [entry], updatedAt: now };
-        sessions = [newSession, ...sessions];
+        const newBoard: Board = { ...currentBoard, items: [entry], updatedAt: now };
+        boards = [newBoard, ...boards];
       }
-      await writeHistoryFile({ sessions });
+      await writeHistoryFile({ boards });
     } catch (e) {
       console.error("failed to write solve history:", e);
       // do not fail the request if history persistence fails
     }
 
-    // Return the structured response (include questionText and sessionId for UI)
+    // Return the structured response (include questionText and boardId for UI)
     return json(200, { 
       message, 
       answerPlain, 
       answerLatex, 
       explanation,
       questionText,
-      sessionId,
+      boardId,
     });
     
   } catch (err: any) {

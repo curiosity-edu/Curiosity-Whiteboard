@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 export default function Nav() {
   const pathname = usePathname();
-  const isHome = pathname === "/";
+  const isBoards = pathname === "/boards" || pathname?.startsWith("/board/");
   const isAbout = pathname?.startsWith("/about");
 
   const linkBase = "text-base";
@@ -15,11 +15,11 @@ export default function Nav() {
   return (
     <div className="flex items-center gap-4">
       <Link
-        href="/"
-        className={`${linkBase} ${isHome ? active : inactive}`}
-        aria-current={isHome ? "page" : undefined}
+        href="/boards"
+        className={`${linkBase} ${isBoards ? active : inactive}`}
+        aria-current={isBoards ? "page" : undefined}
       >
-        Whiteboard
+        My Boards
       </Link>
       <Link
         href="/about"
