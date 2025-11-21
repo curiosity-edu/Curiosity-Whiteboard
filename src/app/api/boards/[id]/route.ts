@@ -5,8 +5,7 @@ import path from "path";
 
 export const runtime = "nodejs";
 
-// Writable only in serverless: use /tmp. Ephemeral and per-instance.
-const STORE_FILE = path.join("/tmp", "solve_history.json");
+const STORE_FILE = path.join(process.cwd(), "data", "solve_history.json");
 
 type HistoryItem = { question: string; response: string; ts: number };
 type Board = { id: string; title: string; createdAt: number; updatedAt: number; items: HistoryItem[] };
@@ -16,31 +15,13 @@ async function ensureDir() {
   await fs.mkdir(path.dirname(STORE_FILE), { recursive: true });
 }
 
-async function readSeed(req: NextRequest): Promise<StoreShape> {
-  try {
-    const origin = req.nextUrl?.origin;
-    const url = `${origin}/solve_history.json`;
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error(`Seed fetch failed: ${res.status}`);
-    return (await res.json()) as StoreShape;
-  } catch {
-    return { boards: [] } as StoreShape;
-  }
-}
-
-async function readStore(req: NextRequest): Promise<StoreShape> {
+async function readStore(): Promise<StoreShape> {
   try {
     await ensureDir();
     const buf = await fs.readFile(STORE_FILE, "utf8");
     return JSON.parse(buf);
   } catch {
-    const seed = await readSeed(req);
-    try {
-      await fs.writeFile(STORE_FILE, JSON.stringify(seed, null, 2), "utf8");
-    } catch (_) {
-      // ignore write errors
-    }
-    return seed;
+    return { boards: [] } as StoreShape;
   }
 }
 
@@ -50,10 +31,10 @@ function toBoards(shape: StoreShape): Board[] {
   return [];
 }
 
-export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
-  const shape = await readStore(req);
+  const shape = await readStore();
   const boards = toBoards(shape);
   const b = boards.find((x) => x.id === id);
   if (!b) return NextResponse.json({ error: "Not found" }, { status: 404 });

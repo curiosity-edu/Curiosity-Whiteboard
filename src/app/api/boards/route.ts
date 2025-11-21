@@ -5,8 +5,7 @@ import path from "path";
 
 export const runtime = "nodejs";
 
-// Writable only in serverless: use /tmp. This will be ephemeral and per-instance.
-const STORE_FILE = path.join("/tmp", "solve_history.json");
+const STORE_FILE = path.join(process.cwd(), "data", "solve_history.json");
 
 type HistoryItem = { question: string; response: string; ts: number };
 type Board = { id: string; title: string; createdAt: number; updatedAt: number; items: HistoryItem[] };
@@ -16,33 +15,13 @@ async function ensureDir() {
   await fs.mkdir(path.dirname(STORE_FILE), { recursive: true });
 }
 
-async function readSeed(req: NextRequest): Promise<StoreShape> {
-  try {
-    const origin = req.nextUrl?.origin;
-    const url = `${origin}/solve_history.json`;
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error(`Seed fetch failed: ${res.status}`);
-    return (await res.json()) as StoreShape;
-  } catch (e) {
-    // If seed isn't available, default to empty
-    return { boards: [] } as StoreShape;
-  }
-}
-
-async function readStore(req: NextRequest): Promise<StoreShape> {
+async function readStore(): Promise<StoreShape> {
   try {
     await ensureDir();
     const buf = await fs.readFile(STORE_FILE, "utf8");
     return JSON.parse(buf);
   } catch {
-    // Fallback: prime from public seed
-    const seed = await readSeed(req);
-    try {
-      await writeStore(seed);
-    } catch (_) {
-      // ignore write errors
-    }
-    return seed;
+    return { boards: [] } as StoreShape;
   }
 }
 
@@ -62,8 +41,8 @@ function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export async function GET(req: NextRequest) {
-  const shape = await readStore(req);
+export async function GET() {
+  const shape = await readStore();
   const boards = toBoards(shape)
     .slice()
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
@@ -77,7 +56,7 @@ export async function POST(req: NextRequest) {
     const t = (title ?? "").toString().trim();
     if (!t) return NextResponse.json({ error: "Title is required." }, { status: 400 });
 
-    const shape = await readStore(req);
+    const shape = await readStore();
     let boards = toBoards(shape);
     const now = Date.now();
     const id = makeId();
