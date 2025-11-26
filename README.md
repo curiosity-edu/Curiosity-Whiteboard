@@ -2,8 +2,7 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Live Site
 
-- Primary: https://whiteboard-ai-v1-j6mx-git-main-shlok-rathis-projects-d1144ddc.vercel.app/
-- Custom domain (if DNS configured): https://curiosity-edu.org
+https://curiosity-edu.org
 
 ## Getting Started
 
@@ -44,11 +43,15 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
   "boards": [
     {
       "id": "1731520123456-abc12345",
-      "title": "Algebra Practice",          // Provided by user at creation time
+      "title": "Algebra Practice", // Provided by user at creation time
       "createdAt": 1731520123456,
       "updatedAt": 1731520456789,
       "items": [
-        { "question": "…transcribed text…", "response": "…AI response text…", "ts": 1731520123456 },
+        {
+          "question": "…transcribed text…",
+          "response": "…AI response text…",
+          "ts": 1731520123456
+        },
         { "question": "…", "response": "…", "ts": 1731520456789 }
       ]
     }
@@ -57,9 +60,11 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 ```
 
 - Migration: legacy `{"sessions": [...]}` is treated as `boards` for backward compatibility in the API.
+
 ## Prompting Rules
 
 ### System Prompt
+
 ```
 You are a careful math solver that reads problems from images.
 You must decide the response style from the problem itself:
@@ -80,6 +85,7 @@ Return ONLY valid JSON with keys:
 ```
 
 ### User Prompt
+
 ```
 Here is the prior history as JSON. Use it as context: [historyString]
 Now read the math in this image and respond using the rules above.
@@ -91,21 +97,25 @@ Return ONLY JSON with the keys described above.
 ## Program Flow
 
 ### 0. Landing and Navigation
+
 - User lands at `GET /` → redirected to `GET /boards`.
 - `My Boards` page lists all boards from `GET /api/boards` with newest updated first.
 - User can click `New Board` → goes to `/boards/new`, enters a title, `POST /api/boards` creates a board, then redirects to `/board/[id]`.
 
 ### 1. Board View (`/board/[id]`)
+
 - Renders `Board` with a required `boardId` prop.
 - Left: TLDraw canvas fills available height; bottom toolbar always visible.
 - Right: AI Panel with controls (Ask AI, Add to Canvas, History).
 
 ### 2. Ask AI (client in `src/components/Board.tsx`)
+
 - Collects selected shapes (or all shapes if none) and exports as PNG (with padding, scale).
 - Constructs `FormData` with `image` and `boardId`.
 - `POST /api/solve` is called; loading state is shown.
 
 ### 3. Solve API (server in `src/app/api/solve/route.ts`)
+
 - Validates the upload and reads current board items from `data/solve_history.json`.
 - Sends the image and the board's prior items as JSON context to OpenAI with the system prompt.
 - Receives JSON `{ message, question_text, ... }`.
@@ -113,15 +123,18 @@ Return ONLY JSON with the keys described above.
 - Returns `{ message, questionText, boardId, ... }` to the client.
 
 ### 4. Client Update (Board)
+
 - Shows the AI response in the AI Panel list (newest first).
 - If "Add to Canvas" is enabled, adds a TLDraw text shape below the selection with `toRichText(message)`.
 - History overlay can be opened to view the entire board conversation; reads `GET /api/boards/[id]`.
 
 ### 5. Persistence
+
 - File-based store `data/solve_history.json` is read/written on each request.
 - In production, move to a real database (e.g., Firebase/Firestore) and associate boards to authenticated users.
 
 ### 6. Error Handling
+
 - Network errors: Shows user-friendly error message in the AI panel
 - API errors: Displays the error message from the server
 - Invalid responses: Falls back to plain text display if JSON parsing fails
@@ -160,34 +173,50 @@ Return ONLY JSON with the keys described above.
 
 ## Action Items
 
-### Whiteboard-Related Functionality Items
+### Before Next Meeting:
 
-- **Before Next Meeting**
-  - Advaith: Double clicking card in AI panel should insert into canvas as text
-  - Shlok: Verify successful deployment to domain, other task forgotten during meeting
+- **Advaith**: Drag panel response (double click) into canvas and convert it to text (DONE)
+- **Shlok**: First principles prompting: 4 branches for hint/explanation and concept/algebraic (start, continue together in meeting)
 
-- **Done (11/18/25)**
-  - Implemented the full “boards” model and UX: APIs, pages, Board component, nav, and routing. We can now manage multiple boards, each with a single conversation history, with new board titles collected from the user. Includes "My Boards" landing page.
+### Meeting on 11/18/2025
 
-- **Next Meeting (11/20/25)**
-  - Implement Google Auth + Database Setup (Firebase) together
+[Insert link to video recap]
 
-- **After This**
-  - Adding model response to Canvas should size up to user writing size
-  - First principles prompting: Need 4 branches for hint/explanation (concept & algebraic)
-  - Ability to locate/highlight errors in work on whiteboard
+### Meeting on 11/20/2025
 
-- **Deadline for Functionality Items**: 12/14/2025
+[Insert Link to video recap]
 
-### UI Related Tasks
+### Next Meeting (11/26/2025)
 
-- AI Panel doesn’t need to go all the way down (reduce height); stack alerts like WhatsApp messages
+- Work on database structure for Firebase
+- General architecture
+- Google Auth implementation
+
+### After This:
+
+- Voice input (partially implemented)
+- Matching user text size
+- Detect/highlight errors in work
+
+### Deadline for Functionality Items: 12/14/2025
+
+### UI Related Tasks:
+
+- AI Panel doesn't need to go all the way down (too much screen estate)
+- Stack alerts like WhatsApp messages
 - Write-out animation on whiteboard
-- “Ask AI” should be bigger and more colorful
+- Ask AI should be bigger and more colorful
 
-- **Deadline for UI Items**: End of break
+### Deadline for UI Items: End of break
 
-### Deployment
+### Deployment:
 
-- Send email to Srividya (Cascaida)
+- Send email to Srividya (Cascadia)
 - Send email to UW math professors
+
+### Second Sprint (way later):
+
+- Adding Legacy Curiosity features
+  - Manim video generator (already implemented)
+  - Course generator (partially implemented)
+  - etc.
