@@ -29,6 +29,7 @@ export default function Board({ boardId }: { boardId: string }) {
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [archive, setArchive] = React.useState<HistoryItem[] | null>(null);
   const historyScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
 
   // Whether to add AI responses to the canvas as a text shape
   const [addToCanvas, setAddToCanvas] = React.useState<boolean>(() => {
@@ -62,7 +63,9 @@ export default function Board({ boardId }: { boardId: string }) {
   async function openHistory() {
     setArchive(null);
     try {
-      const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}`, { method: "GET" });
+      const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}`, {
+        method: "GET",
+      });
       const j = await res.json();
       const items = Array.isArray(j?.items) ? (j.items as HistoryItem[]) : [];
       items.sort((a, b) => (a.ts || 0) - (b.ts || 0));
@@ -97,6 +100,22 @@ export default function Board({ boardId }: { boardId: string }) {
     } catch {}
     console.log("[Board] Editor mounted:", editor);
   }, []); // Fixed: removed addToCanvas from dependencies
+
+  function addResponseToCanvas(text: string) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const p = editor.screenToPage(editor.getViewportScreenCenter());
+    editor.createShape<TLTextShape>({
+      type: "text",
+      x: p.x,
+      y: p.y,
+      props: {
+        richText: toRichText(text),
+        autoSize: false,
+        w: 400,
+      },
+    });
+  }
 
   /**
    * Calculates the bounding box that contains all specified shapes
@@ -285,42 +304,70 @@ export default function Board({ boardId }: { boardId: string }) {
             AI Panel
           </div>
           <div className="flex items-center gap-3">
-            <label
-              className="flex items-center gap-1 text-xs text-neutral-700"
-              title="Also place the AI response onto the canvas"
-            >
-              <input
-                type="checkbox"
-                className="accent-blue-600"
-                checked={addToCanvas}
-                onChange={(e) => setAddToCanvas(e.target.checked)}
-              />
-              Add to Canvas
-            </label>
-            <button
-              onClick={openHistory}
-              className="rounded-lg border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100"
-              title="Open history"
-            >
-              History
-            </button>
             <button
               onClick={askAI}
               disabled={loading}
-              className="rounded-lg border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100 disabled:opacity-50"
+              className="rounded-md px-4 py-2.5 bg-blue-600 text-yellow-400 font-semibold shadow-sm text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
               title="Export board and ask AI"
             >
               {loading ? "Thinking…" : "Ask AI"}
             </button>
-            {aiItems.length > 0 && (
+            <div className="relative">
               <button
-                onClick={() => setAiItems([])}
-                className="text-xs text-neutral-500 hover:text-neutral-700"
-                title="Clear all"
+                onClick={() => setSettingsOpen((v) => !v)}
+                className="p-1.5 text-2xl text-neutral-500 hover:text-neutral-800"
+                title="Settings"
+                aria-haspopup="menu"
+                aria-expanded={settingsOpen}
               >
-                Clear all
+                ⚙️
               </button>
-            )}
+              {settingsOpen && (
+                <div
+                  role="menu"
+                  aria-label="AI Panel settings"
+                  className="absolute right-0 mt-2 w-56 rounded-lg border border-neutral-200 bg-white shadow-lg p-2 z-10"
+                >
+                  <label
+                    className="flex items-center gap-2 px-2 py-2 text-sm text-neutral-800 cursor-pointer"
+                    title="Automatically place AI responses onto the canvas"
+                  >
+                    <input
+                      type="checkbox"
+                      className="accent-blue-600"
+                      checked={addToCanvas}
+                      onChange={(e) => {
+                        setAddToCanvas(e.target.checked);
+                      }}
+                    />
+                    <span>Always add to Canvas</span>
+                  </label>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      openHistory();
+                    }}
+                    className="w-full text-left px-2 py-2 rounded-md text-sm text-neutral-800 hover:bg-neutral-100"
+                    title="Open history"
+                  >
+                    History
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      setAiItems([]);
+                    }}
+                    disabled={aiItems.length === 0}
+                    className="w-full text-left px-2 py-2 rounded-md text-sm text-neutral-800 hover:bg-neutral-100 disabled:opacity-50"
+                    title="Clear all responses"
+                  >
+                    Clear all
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -334,7 +381,7 @@ export default function Board({ boardId }: { boardId: string }) {
             aiItems.map((item) => (
               <div
                 key={item.id}
-                className="relative rounded-lg border border-neutral-200 bg-white shadow-sm p-3 pr-8"
+                className="relative rounded-lg border border-neutral-200 bg-white shadow-sm p-3 pr-12"
                 role="status"
                 aria-live="polite"
               >
@@ -344,6 +391,14 @@ export default function Board({ boardId }: { boardId: string }) {
                 <div className="whitespace-pre-wrap text-sm text-neutral-900">
                   {item.text}
                 </div>
+                <button
+                  onClick={() => addResponseToCanvas(item.text)}
+                  className="absolute top-2 right-8 text-neutral-400 hover:text-neutral-700"
+                  title="Add to canvas"
+                  aria-label="Add to canvas"
+                >
+                  +
+                </button>
                 <button
                   onClick={() => removeAIItem(item.id)}
                   className="absolute top-2 right-2 text-neutral-400 hover:text-neutral-700"
@@ -362,7 +417,9 @@ export default function Board({ boardId }: { boardId: string }) {
           <div className="absolute inset-0 bg-white flex flex-col">
             {/* History header */}
             <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 bg-white">
-              <div className="text-sm font-semibold text-neutral-700">History</div>
+              <div className="text-sm font-semibold text-neutral-700">
+                History
+              </div>
               <div>
                 <button
                   onClick={() => setHistoryOpen(false)}
@@ -374,7 +431,10 @@ export default function Board({ boardId }: { boardId: string }) {
               </div>
             </div>
             {/* History content */}
-            <div ref={historyScrollRef} className="flex-1 overflow-y-auto p-3 space-y-4">
+            <div
+              ref={historyScrollRef}
+              className="flex-1 overflow-y-auto p-3 space-y-4"
+            >
               {archive === null ? (
                 <div className="text-xs text-neutral-500">Loading…</div>
               ) : archive.length === 0 ? (
