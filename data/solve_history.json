@@ -4,7 +4,7 @@
       "id": "1763699983124-44s7hzla",
       "title": "Testing Reverted Commit",
       "createdAt": 1763699983124,
-      "updatedAt": 1764119068606,
+      "updatedAt": 1764299017621,
       "items": [
         {
           "question": "Explain on a high level how virtual memory works",
@@ -45,6 +45,36 @@
           "question": "how does dijkstra's algorithm work",
           "response": "Dijkstra's algorithm finds the shortest path from a starting node to all other nodes in a weighted graph. It works by initializing the starting node's distance to zero and all others to infinity. It repeatedly selects the node with the smallest tentative distance, updates the distances of its neighbors, and marks it as visited. This process continues until all nodes are visited, ensuring the shortest path to each node is found. The algorithm is efficient for graphs with non-negative weights.",
           "ts": 1764119068606
+        },
+        {
+          "question": "",
+          "response": "",
+          "ts": 1764297291539
+        },
+        {
+          "question": "can you teach me about derivatives and how they relate to the fundamental theorem of calculus I'm really confused also how do eigenvectors fit in there",
+          "response": "Derivatives measure how a function changes as its input changes. The Fundamental Theorem of Calculus links derivatives and integrals, showing that differentiation and integration are inverse processes. It states that if a function is continuous over an interval, then its integral over that interval can be found using its antiderivative.\n\nEigenvectors, on the other hand, are related to linear algebra. They are vectors that only scale when a linear transformation is applied, not changing direction. They don't directly relate to derivatives or the Fundamental Theorem of Calculus but are crucial in solving systems of linear equations and in various applications like stability analysis.",
+          "ts": 1764297350721
+        },
+        {
+          "question": "x^2 + 10x + 7 = 0\nx = -10 + sqrt(10^2 - 4(1)(7) / 2(1))",
+          "response": "x² + 10x + 7 = 0\n\nUsing the quadratic formula: x = [-b ± sqrt(b² - 4ac)] / 2a\n\nHere, a = 1, b = 10, c = 7\n\nx = [-10 ± sqrt(10² - 4(1)(7))] / 2(1)\n\nx = [-10 ± sqrt(100 - 28)] / 2\n\nx = [-10 ± sqrt(72)] / 2\n\nx = [-10 ± 6√2] / 2\n\nx = -5 ± 3√2",
+          "ts": 1764297922237
+        },
+        {
+          "question": "x^2 + 10x + 7 = 0\nx = -10 + sqrt(10^2 - 4(1)(7) / 2(1))\n\nI'm trying to solve the quadratic equation on the Whiteboard but I'm not going to be able to get the right answer judging by the equation set up I have so can you help me figure out why that's not going to work",
+          "response": "The equation setup is incorrect because it only uses the positive square root and misses the negative option. The correct quadratic formula is:\n\nx = [-b ± sqrt(b² - 4ac)] / 2a\n\nFor x² + 10x + 7 = 0, a = 1, b = 10, c = 7:\n\nx = [-10 ± sqrt(10² - 4(1)(7))] / 2(1)\n\nx = [-10 ± sqrt(100 - 28)] / 2\n\nx = [-10 ± sqrt(72)] / 2\n\nx = [-10 ± 6√2] / 2\n\nx = -5 ± 3√2\n\nEnsure to include both ± in the solution.",
+          "ts": 1764298240496
+        },
+        {
+          "question": "x + 6x + 9 = 8\n\nx + 6x = -1\n\nWhat do I do from here? can you give me a hint please?",
+          "response": "First, simplify the left side of the equation by combining like terms: x + 6x becomes 7x. So, the equation is 7x + 9 = 8.\n\nNext, subtract 9 from both sides to isolate the term with x. This will help you solve for x.",
+          "ts": 1764298958133
+        },
+        {
+          "question": "x + 6x + 9 = 8\n\nx + 6x = -1\n\nWhat do I do from here? can you give me a hint please?\n\nwhat do I do from x + 6x = -1 though? how to solve from here?",
+          "response": "To solve the equation, first combine like terms on the left side: x + 6x becomes 7x. So, the equation is 7x + 9 = 8.\n\nNext, subtract 9 from both sides to isolate the term with x. This will give you 7x = -1.\n\nFinally, divide both sides by 7 to solve for x.",
+          "ts": 1764299017621
         }
       ]
     },

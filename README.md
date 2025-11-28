@@ -65,15 +65,13 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ### System Prompt
 
-```
-You are a careful math solver that reads problems from images.
-You must decide the response style from the problem itself:
-- If the image explicitly asks for an explanation (e.g., 'explain', 'why', 'show steps/work', 'derive', 'prove', 'justify'),
-  provide a natural, concise explanation: start with the result, then 2–4 short sentences that explain how.
-- Otherwise, return a work-only solution: a sequence of line-by-line algebraic transformations with minimal labels (<= 6 words).
-  No paragraphs, no extra commentary. Finish with the final answer on the last line.
+The system prompt is composed of two parts:
 
-Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\frac, \\sec, \\tan, $$, \[, \], or \( \)).
+- The contents of `mode_detection_rules.txt` at the repository root (mode detection + response behavior).
+- The existing format policy and JSON output instructions (unchanged), shown below for reference:
+
+```
+Response format policy: DO NOT use LaTeX/TeX markup or commands (no \frac, \sec, \tan, $$, \[, \], or \( \)).
 Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹), and function names like sec(x), tan(x).
 When writing powers, use Unicode superscripts (e.g., x², x³) instead of caret notation. For fractions, use a slash (e.g., (a+b)/2) if needed. Keep the output readable as normal text.
 Keep within ~120 words unless the image explicitly asks for detailed explanation.
@@ -114,10 +112,21 @@ Return ONLY JSON with the keys described above.
 - Constructs `FormData` with `image` and `boardId`.
 - `POST /api/solve` is called; loading state is shown.
 
+### 2b. Voice Input Flow (client in `src/components/Board.tsx`)
+
+- **Start/Stop**: The AI Panel has a `🎤 Speak / ⏹️ Stop` button.
+- **Engine**: Uses the browser Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`). No external library.
+- **Continuous listening**: `continuous = true` with an internal `keepListening` flag. On `onend`, if `keepListening` is true, recognition auto-restarts. User presses Stop to end.
+- **Results handling**: Interim and final transcripts are accumulated. On session end/restart, the spoken text is:
+  - Added to the canvas as a text note.
+  - Passed to `askAI(spoken)` so the image export is paired with the spoken question.
+
 ### 3. Solve API (server in `src/app/api/solve/route.ts`)
 
 - Validates the upload and reads current board items from `data/solve_history.json`.
 - Sends the image and the board's prior items as JSON context to OpenAI with the system prompt.
+  - Loads `mode_detection_rules.txt` and prepends it to the system prompt.
+  - Appends the format policy + JSON keys section (unchanged) after the mode rules.
 - Receives JSON `{ message, question_text, ... }`.
 - Appends `{ question, response, ts }` to the specified board, updates `updatedAt`, and persists to file.
 - Returns `{ message, questionText, boardId, ... }` to the client.
@@ -173,32 +182,21 @@ Return ONLY JSON with the keys described above.
 
 ## Action Items
 
-### Before Next Meeting:
 
-- **Advaith**: Drag panel response (double click) into canvas and convert it to text (DONE)
-- **Shlok**: First principles prompting: 4 branches for hint/explanation and concept/algebraic (start, continue together in meeting)
+### Curiosity Diaries (Meeting Recaps)
 
-### Meeting on 11/18/2025
+[Curiosity Diaries] (https://docs.google.com/document/d/1PZVEnGbW0cBrpEe8pHxyukVcmj3-IsZpuk1y63arrgw/edit?tab=t.0)
 
-[Insert link to video recap]
+### Next Steps
 
-### Meeting on 11/20/2025
+- Test the First Principles Prompting (Mode Detection) and improve as necessary
+- Iron out database structure for Firestore
+- Implement Google Authentication and write to a Users collection
+- Fix voice input issues: should not add to whiteboard, should always be included in question transcription
+- "Ask AI" responses should match the size of user text
+- Create the ability to detect/highlight errors in user work
 
-[Insert Link to video recap]
-
-### Next Meeting (11/26/2025)
-
-- Work on database structure for Firebase
-- General architecture
-- Google Auth implementation
-
-### After This:
-
-- Voice input (partially implemented)
-- Matching user text size
-- Detect/highlight errors in work
-
-### Deadline for Functionality Items: 12/14/2025
+#### Deadline for Functionality Items: 12/14/2025
 
 ### UI Related Tasks:
 

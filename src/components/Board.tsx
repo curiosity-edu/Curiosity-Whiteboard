@@ -32,6 +32,7 @@ export default function Board({ boardId }: { boardId: string }) {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const recognitionRef = React.useRef<any | null>(null);
   const interimRef = React.useRef<string>("");
+  const keepListeningRef = React.useRef<boolean>(false);
   const [isRecording, setIsRecording] = React.useState(false);
 
   // Whether to add AI responses to the canvas as a text shape
@@ -308,10 +309,11 @@ export default function Board({ boardId }: { boardId: string }) {
       const rec = new SR();
       recognitionRef.current = rec;
       interimRef.current = "";
+      keepListeningRef.current = true;
       let finalText = "";
       rec.lang = "en-US";
       rec.interimResults = true;
-      rec.continuous = false;
+      rec.continuous = true;
       rec.onresult = (event: any) => {
         let interim = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -328,13 +330,25 @@ export default function Board({ boardId }: { boardId: string }) {
         console.error("[Voice] error:", e);
       };
       rec.onend = () => {
-        setIsRecording(false);
         const spoken = (finalText || interimRef.current).trim();
         if (spoken) {
           // Add the spoken question to the canvas like a note
           addResponseToCanvas(spoken);
           // Ask AI with the spoken question
           askAI(spoken);
+        }
+        if (keepListeningRef.current) {
+          interimRef.current = "";
+          finalText = "";
+          try {
+            rec.start();
+            setIsRecording(true);
+          } catch (err) {
+            console.error("[Voice] restart failed:", err);
+            setIsRecording(false);
+          }
+        } else {
+          setIsRecording(false);
         }
       };
       setIsRecording(true);
@@ -347,6 +361,7 @@ export default function Board({ boardId }: { boardId: string }) {
 
   function stopVoiceInput() {
     try {
+      keepListeningRef.current = false;
       const rec = recognitionRef.current;
       if (rec && typeof rec.stop === "function") {
         rec.stop();
@@ -361,6 +376,7 @@ export default function Board({ boardId }: { boardId: string }) {
   React.useEffect(() => {
     return () => {
       try {
+        keepListeningRef.current = false;
         const rec = recognitionRef.current;
         if (rec && typeof rec.stop === "function") rec.stop();
       } catch {}
