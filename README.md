@@ -182,10 +182,7 @@ Return ONLY JSON with the keys described above.
 
 ## Action Items
 
-
-### Curiosity Diaries (Meeting Recaps)
-
-[Curiosity Diaries](https://drive.google.com/drive/folders/17Z9vFGqZ38VGecYGry0HLb0c6AFYhKCR?usp=sharing)
+### Meeting Recaps: [Curiosity Diaries](https://drive.google.com/drive/folders/17Z9vFGqZ38VGecYGry0HLb0c6AFYhKCR?usp=sharing)
 
 ### Next Steps
 
@@ -196,7 +193,7 @@ Return ONLY JSON with the keys described above.
 - "Ask AI" responses should match the size of user text
 - Create the ability to detect/highlight errors in user work
 
-#### Deadline for Functionality Items: 12/14/2025
+### Deadline for Functionality Items: 12/14/2025
 
 ### UI Related Tasks:
 
@@ -207,14 +204,14 @@ Return ONLY JSON with the keys described above.
 
 ### Deadline for UI Items: End of break
 
-### Deployment:
+#### Deployment:
 
 - Send email to Srividya (Cascadia)
 - Send email to UW math professors
 
-### Second Sprint (way later):
+#### Second Sprint (Post Break):
 
-- Adding Legacy Curiosity features
+- Integrate Legacy Curiosity features
   - Manim video generator (already implemented)
   - Course generator (partially implemented)
   - etc.
