@@ -2,12 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { UserAuth } from "@/context/AuthContext";
 
 export default function Nav() {
   const pathname = usePathname();
-  const [user] = (UserAuth() as any) || [];
-  const isBoards = pathname === "/boards" || pathname?.startsWith("/board/");
   const isAbout = pathname?.startsWith("/about");
 
   const linkBase = "text-base";
@@ -16,15 +13,6 @@ export default function Nav() {
 
   return (
     <div className="flex items-center gap-4">
-      {user && (
-        <Link
-          href="/boards"
-          className={`${linkBase} ${isBoards ? active : inactive}`}
-          aria-current={isBoards ? "page" : undefined}
-        >
-          My Boards
-        </Link>
-      )}
       <Link
         href="/about"
         className={`${linkBase} ${isAbout ? active : inactive}`}

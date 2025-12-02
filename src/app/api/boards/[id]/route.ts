@@ -25,6 +25,11 @@ async function readStore(): Promise<StoreShape> {
   }
 }
 
+async function writeStore(data: StoreShape) {
+  await ensureDir();
+  await fs.writeFile(STORE_FILE, JSON.stringify(data, null, 2), "utf8");
+}
+
 function toBoards(shape: StoreShape): Board[] {
   if (Array.isArray((shape as any).boards)) return (shape as any).boards as Board[];
   if (Array.isArray((shape as any).sessions)) return (shape as any).sessions as Board[];
@@ -39,4 +44,17 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
   const b = boards.find((x) => x.id === id);
   if (!b) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ id: b.id, title: b.title, createdAt: b.createdAt, updatedAt: b.updatedAt, items: b.items ?? [] });
+}
+
+export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
+  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+  const shape = await readStore();
+  const boards = toBoards(shape);
+  const next = boards.filter((b) => b.id !== id);
+  if (next.length === boards.length) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  await writeStore({ boards: next });
+  return new NextResponse(null, { status: 204 });
 }
