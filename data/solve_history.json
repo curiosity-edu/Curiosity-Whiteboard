@@ -1,17 +1,11 @@
 {
   "boards": [
     {
-      "id": "1764644852992-oofry91n",
+      "id": "1764789644337-ssqmgvyk",
       "title": "Untitled",
-      "createdAt": 1764644852992,
-      "updatedAt": 1764732400631,
-      "items": [
-        {
-          "question": "monkey away I'm not supposed to speak oops Yeah",
-          "response": "This image does not contain any math content. Let me know if there's anything else you need help with!",
-          "ts": 1764732400631
-        }
-      ]
+      "createdAt": 1764789644337,
+      "updatedAt": 1764789644337,
+      "items": []
     }
   ]
 }
