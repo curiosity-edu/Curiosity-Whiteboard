@@ -1,6 +1,6 @@
 "use client";
 import { useContext, createContext, useState, useEffect } from "react";
-import {signInWithPopup, signOut, onAuthStateChanged, GoogleAuthProvider} from "firebase/auth";
+import {signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged, GoogleAuthProvider} from "firebase/auth";
 import { auth } from "@/lib/firebase";
 
 const AuthContext = createContext(null);
@@ -8,13 +8,23 @@ const AuthContext = createContext(null);
 export const AuthContextProvider = ({ children }) => {
   const [user, setUser] = useState(null);
 
-    const googleSignIn = () => {
+    const googleSignIn = async () => {
         const provider = new GoogleAuthProvider();
-        signInWithPopup(auth, provider);
+        provider.setCustomParameters({ prompt: "select_account" });
+        try {
+            return await signInWithPopup(auth, provider);
+        } catch (err) {
+            const code = (err && err.code) || "";
+            // If popups are blocked or not allowed, fall back to full-page redirect
+            if (code === "auth/popup-blocked" || code === "auth/popup-blocked-by-browser") {
+                return await signInWithRedirect(auth, provider);
+            }
+            throw err;
+        }
     }
 
-    const logOut = () => {
-        signOut(auth);  
+    const logOut = async () => {
+        return await signOut(auth);  
     }
 
     useEffect(() => {
@@ -22,7 +32,7 @@ export const AuthContextProvider = ({ children }) => {
             setUser(currentUser);
         })
         return () => unsubscribe();
-    }, [user]);
+    }, []);
 
   
   return <AuthContext.Provider value={[user, googleSignIn, logOut]}>{children}</AuthContext.Provider>;
