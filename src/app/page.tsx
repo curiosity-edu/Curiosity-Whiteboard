@@ -22,6 +22,20 @@ export default async function Page() {
   const created = await createBoard();
   const id = created?.id as string | undefined;
   if (id) redirect(`/board/${id}`);
-  // If board creation fails, stay on root (could render an error UI here)
-  redirect("/");
+  // If board creation fails, render a simple retry UI to avoid redirect loops
+  return (
+    <main className="h-[calc(100vh-3.5rem)] w-full grid place-items-center bg-white">
+      <div className="text-center">
+        <h1 className="text-lg font-semibold text-neutral-900">
+          Couldn’t create a new board
+        </h1>
+        <p className="text-sm text-neutral-600 mt-1">Please try again.</p>
+        <form action="/" method="get" className="mt-3">
+          <button className="px-3 py-2 text-sm font-medium text-white bg-neutral-900 rounded-md hover:bg-neutral-800">
+            Try Again
+          </button>
+        </form>
+      </div>
+    </main>
+  );
 }
