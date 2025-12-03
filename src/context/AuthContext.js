@@ -10,7 +10,7 @@ export const AuthContextProvider = ({ children }) => {
 
     const googleSignIn = () => {
         const provider = new GoogleAuthProvider();
-        signInWithPopup(auth, provider);
+        return signInWithPopup(auth, provider);
     }
 
     const logOut = () => {
@@ -22,7 +22,7 @@ export const AuthContextProvider = ({ children }) => {
             setUser(currentUser);
         })
         return () => unsubscribe();
-    }, [user]);
+    }, []);
 
   
   return <AuthContext.Provider value={[user, googleSignIn, logOut]}>{children}</AuthContext.Provider>;
