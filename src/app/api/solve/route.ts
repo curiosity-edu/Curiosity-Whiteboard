@@ -1,8 +1,6 @@
 // src/app/api/solve/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import fs from "fs/promises";
-import path from "path";
 
 // Configure the runtime environment for the API route
 export const runtime = "nodejs";
@@ -19,41 +17,8 @@ function json(status: number, data: unknown) {
   return NextResponse.json(data, { status });
 }
 
-// File path for persisted boards
-const HISTORY_FILE = path.join(process.cwd(), "data", "solve_history.json");
-type HistoryItem = { question: string; response: string; ts: number };
-type Board = { id: string; title: string; createdAt: number; updatedAt: number; items: HistoryItem[] };
-type StoreShape = { boards: Board[] } | { sessions: any[] } | any;
-
-async function ensureHistoryDir() {
-  await fs.mkdir(path.dirname(HISTORY_FILE), { recursive: true });
-}
-
 function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-async function readHistory(): Promise<StoreShape> {
-  try {
-    await ensureHistoryDir();
-    const buf = await fs.readFile(HISTORY_FILE, "utf8");
-    const data = JSON.parse(buf);
-    return data as StoreShape;
-  } catch {
-    return { boards: [] } as StoreShape;
-  }
-}
-
-async function writeHistoryFile(shape: StoreShape) {
-  await ensureHistoryDir();
-  await fs.writeFile(HISTORY_FILE, JSON.stringify(shape, null, 2), "utf8");
-}
-
-function toBoards(shape: StoreShape): Board[] {
-  if (Array.isArray((shape as any).boards)) return (shape as any).boards as Board[];
-  // migrate legacy sessions -> boards seamlessly
-  if (Array.isArray((shape as any).sessions)) return (shape as any).sessions as Board[];
-  return [];
 }
 
 /**
@@ -71,6 +36,7 @@ export async function POST(req: NextRequest) {
     const file = form.get("image");
     const boardIdRaw = form.get("boardId") ?? form.get("sessionId"); // backward compat
     const boardId = (typeof boardIdRaw === "string" ? boardIdRaw : undefined) || makeId();
+    const historyRaw = form.get("history");
     
     // Validate the uploaded file
     if (!(file instanceof File)) return json(400, { error: "No 'image' file in form-data." });
@@ -83,25 +49,14 @@ export async function POST(req: NextRequest) {
     // Convert the image to a data URL for the OpenAI API
     const dataUrl = `data:${file.type};base64,${Buffer.from(arr).toString("base64")}`;
     
-    // Read prior conversation history and stringify ONLY current session for context
-    const shape = await readHistory();
-    let boards: Board[] = toBoards(shape);
-    const existingIdx = boards.findIndex((b) => b.id === boardId);
-    const currentBoard: Board =
-      existingIdx >= 0
-        ? boards[existingIdx]
-        : { id: boardId, title: "", createdAt: Date.now(), updatedAt: Date.now(), items: [] };
-    const historyString = JSON.stringify(currentBoard.items);
+    // Read prior conversation history from client (Firestore-backed when signed in)
+    let historyString = "[]";
+    if (typeof historyRaw === "string") {
+      historyString = historyRaw;
+    }
 
     // Initialize the OpenAI client
     const client = new OpenAI({ apiKey });
-
-    // Load mode detection rules from file (optional, non-fatal if missing)
-    let modeRules = "";
-    try {
-      const rulesPath = path.join(process.cwd(), "mode_detection_rules.txt");
-      modeRules = await fs.readFile(rulesPath, "utf8");
-    } catch {}
 
     // Send the image to OpenAI for processing
     // The system prompt instructs the AI on how to format its response
@@ -113,7 +68,6 @@ export async function POST(req: NextRequest) {
         {
           role: "system",
           content:
-            (modeRules ? modeRules + "\n\n" : "") +
             "Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\frac, \\sec, \\tan, $$, \\[, \\], or \\( \\\)). " +
             "Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹), and function names like sec(x), tan(x). " +
             "When writing powers, use Unicode superscripts (e.g., x², x³) instead of caret notation. For fractions, use a slash (e.g., (a+b)/2) if needed. Keep the output readable as normal text.\n" +
@@ -164,26 +118,6 @@ export async function POST(req: NextRequest) {
     const answerPlain = (parsed?.answer_plain ?? "").toString().trim();
     const answerLatex = (parsed?.answer_latex ?? "").toString().trim();
     const explanation = (parsed?.explanation ?? "").toString().trim();
-
-    // Persist history with new entry (append in order) to the current board only
-    try {
-      const now = Date.now();
-      const entry: HistoryItem = { question: questionText, response: message, ts: now };
-      if (existingIdx >= 0) {
-        const next = { ...boards[existingIdx] };
-        next.items = [...next.items, entry];
-        next.updatedAt = now;
-        boards = [...boards];
-        boards[existingIdx] = next;
-      } else {
-        const newBoard: Board = { ...currentBoard, items: [entry], updatedAt: now };
-        boards = [newBoard, ...boards];
-      }
-      await writeHistoryFile({ boards });
-    } catch (e) {
-      console.error("failed to write solve history:", e);
-      // do not fail the request if history persistence fails
-    }
 
     // Return the structured response (include questionText and boardId for UI)
     return json(200, { 

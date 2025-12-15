@@ -4,6 +4,16 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { UserAuth } from "@/context/AuthContext";
+import { database } from "@/lib/firebase";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  orderBy,
+  query,
+  updateDoc,
+} from "firebase/firestore";
 import { TbLayoutSidebarLeftCollapseFilled } from "react-icons/tb";
 import { FcAbout } from "react-icons/fc";
 import { IoIosCreate } from "react-icons/io";
@@ -50,13 +60,23 @@ export default function MyBoardsSidebar({
       }
       try {
         setLoading(true);
-        const rsp = await fetch("/api/boards", { cache: "no-store" });
-        if (!rsp.ok) {
-          if (!aborted) setBoards([]);
-          return;
-        }
-        const j = await rsp.json();
-        if (!aborted) setBoards(Array.isArray(j?.boards) ? j.boards : []);
+        const q = query(
+          collection(database, "users", user.uid, "boards"),
+          orderBy("updatedAt", "desc")
+        );
+        const snap = await getDocs(q);
+        const list = snap.docs.map((d) => {
+          const data: any = d.data();
+          const items = Array.isArray(data?.items) ? data.items : [];
+          return {
+            id: d.id,
+            title: data?.title ?? "",
+            createdAt: data?.createdAt ?? 0,
+            updatedAt: data?.updatedAt ?? 0,
+            count: items.length,
+          };
+        });
+        if (!aborted) setBoards(list);
       } catch {
         if (!aborted) setBoards([]);
       } finally {
@@ -120,11 +140,8 @@ export default function MyBoardsSidebar({
         return;
       }
       setDeletingId(id);
-      const rsp = await fetch(`/api/boards/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      if (!rsp.ok && rsp.status !== 204) {
-        throw new Error(`Delete failed (${rsp.status})`);
+      if (user) {
+        await deleteDoc(doc(database, "users", user.uid, "boards", id));
       }
       setBoards((prev) => prev.filter((b) => b.id !== id));
       if (currentBoardId === id) {
@@ -157,13 +174,11 @@ export default function MyBoardsSidebar({
       setBoards((prev) =>
         prev.map((x) => (x.id === id ? { ...x, title: t } : x))
       );
-      const rsp = await fetch(`/api/boards/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: t }),
-      });
-      if (!rsp.ok) {
-        throw new Error(`Rename failed (${rsp.status})`);
+      if (user) {
+        await updateDoc(doc(database, "users", user.uid, "boards", id), {
+          title: t,
+          updatedAt: Date.now(),
+        });
       }
     } catch (e) {
       console.error("[Boards] rename failed", e);

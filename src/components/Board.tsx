@@ -14,6 +14,9 @@ import "tldraw/tldraw.css";
 import MyBoardsSidebar from "@/components/MyBoardsSidebar";
 import { TbLayoutSidebarRightCollapseFilled } from "react-icons/tb";
 import { IoIosSettings } from "react-icons/io";
+import { UserAuth } from "@/context/AuthContext";
+import { database } from "@/lib/firebase";
+import { doc as fsDoc, getDoc, setDoc } from "firebase/firestore";
 
 /**
  * Board component that provides a collaborative whiteboard with AI integration.
@@ -50,6 +53,10 @@ export default function Board({ boardId }: { boardId: string }) {
   const saveTimerRef = React.useRef<NodeJS.Timeout | null>(null);
   const isLoadingDocRef = React.useRef<boolean>(false);
   const [editorReady, setEditorReady] = React.useState(false);
+  const [boardItems, setBoardItems] = React.useState<HistoryItem[]>([]);
+
+  const ctx = (UserAuth() as any) || [];
+  const user = ctx[0];
 
   // Whether to add AI responses to the canvas as a text shape
   const [addToCanvas, setAddToCanvas] = React.useState<boolean>(() => {
@@ -98,11 +105,15 @@ export default function Board({ boardId }: { boardId: string }) {
   async function openHistory() {
     setArchive(null);
     try {
-      const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}`, {
-        method: "GET",
-      });
-      const j = await res.json();
-      const items = Array.isArray(j?.items) ? (j.items as HistoryItem[]) : [];
+      let items: HistoryItem[] = [];
+      if (user) {
+        const ref = fsDoc(database, "users", user.uid, "boards", boardId);
+        const snap = await getDoc(ref);
+        const data: any = snap.exists() ? snap.data() : null;
+        items = Array.isArray(data?.items) ? (data.items as HistoryItem[]) : [];
+      } else {
+        items = [];
+      }
       items.sort((a, b) => (a.ts || 0) - (b.ts || 0));
       setArchive(items);
     } catch (e) {
@@ -146,22 +157,23 @@ export default function Board({ boardId }: { boardId: string }) {
       editor.updateInstanceState({ isReadonly: false });
     } catch {}
     console.log("[Board] Editor mounted:", editor);
-    // Load persisted TLDraw snapshot for this board
+    // Load persisted TLDraw snapshot for this board (Firestore for signed-in users)
     (async () => {
       if (!boardId) return;
       try {
         isLoadingDocRef.current = true;
-        const rsp = await fetch(
-          `/api/boards/${encodeURIComponent(boardId)}/doc`,
-          { cache: "no-store" }
-        );
-        if (rsp.ok) {
-          const j = await rsp.json();
-          if (j?.doc) {
+        if (user) {
+          const ref = fsDoc(database, "users", user.uid, "boards", boardId);
+          const snap = await getDoc(ref);
+          const data: any = snap.exists() ? snap.data() : null;
+          const items = Array.isArray(data?.items)
+            ? (data.items as HistoryItem[])
+            : [];
+          setBoardItems(items);
+          if (data?.doc) {
             try {
-              // loadSnapshot expects a store
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              loadSnapshot((editor as any).store, j.doc);
+              loadSnapshot((editor as any).store, data.doc);
               console.log("[Board] Loaded snapshot for", boardId);
             } catch (e) {
               console.warn("[Board] Failed to load snapshot:", e);
@@ -181,6 +193,7 @@ export default function Board({ boardId }: { boardId: string }) {
   React.useEffect(() => {
     const editor = editorRef.current;
     if (!editor || !boardId) return;
+    if (!user) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const store: any = (editor as any).store;
     const unlisten =
@@ -190,15 +203,16 @@ export default function Board({ boardId }: { boardId: string }) {
         saveTimerRef.current = setTimeout(async () => {
           try {
             const snap = getSnapshot(store);
-            console.log("[Board] autosave -> PUT /doc", {
-              boardId,
-              ts: Date.now(),
-            });
-            await fetch(`/api/boards/${encodeURIComponent(boardId)}/doc`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ doc: snap }),
-            });
+            const ref = fsDoc(database, "users", user.uid, "boards", boardId);
+            await setDoc(
+              ref,
+              {
+                id: boardId,
+                doc: snap,
+                updatedAt: Date.now(),
+              },
+              { merge: true }
+            );
           } catch (e) {
             console.warn("[Board] autosave failed:", e);
           }
@@ -329,6 +343,9 @@ export default function Board({ boardId }: { boardId: string }) {
         if (questionFromVoice && questionFromVoice.trim()) {
           fd.append("question", questionFromVoice.trim());
         }
+        // Provide history context from client (Firestore-backed for signed-in users)
+        const historyForModel = user ? boardItems : [];
+        fd.append("history", JSON.stringify(historyForModel));
 
         // Send the image to the solve API
         const res = await fetch("/api/solve", { method: "POST", body: fd });
@@ -358,6 +375,32 @@ export default function Board({ boardId }: { boardId: string }) {
         // Add to AI panel (notifications list)
         const questionText = (raw?.questionText ?? "").toString().trim();
         addAIItem(finalText, questionText);
+
+        // Persist conversation history to Firestore for signed-in users
+        if (user) {
+          const now = Date.now();
+          const entry: HistoryItem = {
+            question: questionText,
+            response: finalText,
+            ts: now,
+          };
+          const nextItems = [...boardItems, entry];
+          setBoardItems(nextItems);
+          try {
+            const ref = fsDoc(database, "users", user.uid, "boards", boardId);
+            await setDoc(
+              ref,
+              {
+                id: boardId,
+                updatedAt: now,
+                items: nextItems,
+              },
+              { merge: true }
+            );
+          } catch (e) {
+            console.warn("[Board] failed to persist items:", e);
+          }
+        }
 
         // Read the current value of addToCanvas from localStorage to ensure we have the latest value
         let shouldAddToCanvas = addToCanvas;
@@ -399,7 +442,7 @@ export default function Board({ boardId }: { boardId: string }) {
         setLoading(false);
       }
     },
-    [addToCanvas]
+    [addToCanvas, boardItems, user]
   );
 
   // Voice input: start/stop recognition

@@ -1,66 +1,68 @@
 // src/app/page.tsx
-import { redirect } from "next/navigation";
-import { headers } from "next/headers";
+"use client";
+import * as React from "react";
+import { useRouter } from "next/navigation";
+import { UserAuth } from "@/context/AuthContext";
+import { database } from "@/lib/firebase";
+import {
+  collection,
+  doc,
+  getDocs,
+  orderBy,
+  query,
+  setDoc,
+} from "firebase/firestore";
 
-async function getBaseUrl() {
-  const h = await headers();
-  const host = h.get("x-forwarded-host") || h.get("host") || "localhost:3000";
-  const proto = (h.get("x-forwarded-proto") ||
-    (process.env.NODE_ENV !== "production" ? "http" : "https")) as string;
-  return `${proto}://${host}`;
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function fetchBoards(): Promise<any[] | null> {
-  const base = await getBaseUrl();
-  try {
-    const rsp = await fetch(`${base}/api/boards`, { cache: "no-store" });
-    if (!rsp.ok) return null;
-    const j = await rsp.json();
-    return Array.isArray(j?.boards) ? j.boards : [];
-  } catch {
-    return null;
-  }
-}
+export default function Page() {
+  const router = useRouter();
+  const ctx = (UserAuth() as any) || [];
+  const user = ctx[0];
 
-async function createBoard() {
-  const base = await getBaseUrl();
-  const rsp = await fetch(`${base}/api/boards`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title: "Untitled" }),
-    cache: "no-store",
-  });
-  if (!rsp.ok) return null;
-  return rsp.json();
-}
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (user) {
+          const q = query(
+            collection(database, "users", user.uid, "boards"),
+            orderBy("updatedAt", "desc")
+          );
+          const snap = await getDocs(q);
+          const first = snap.docs[0];
+          if (first?.id) {
+            if (!cancelled) router.replace(`/board/${first.id}`);
+            return;
+          }
+          const id = makeId();
+          const now = Date.now();
+          await setDoc(doc(database, "users", user.uid, "boards", id), {
+            id,
+            title: "Untitled",
+            createdAt: now,
+            updatedAt: now,
+            items: [],
+            doc: null,
+          });
+          if (!cancelled) router.replace(`/board/${id}`);
+          return;
+        }
+        const localId = makeId();
+        if (!cancelled) router.replace(`/board/${localId}`);
+      } catch {
+        const localId = makeId();
+        if (!cancelled) router.replace(`/board/${localId}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
-export default async function Page() {
-  // Load existing boards; if any, redirect to the most recent one (index 0)
-  const boards = await fetchBoards();
-  if (boards && boards.length > 0) {
-    const first = boards[0];
-    if (first?.id) redirect(`/board/${first.id}`);
-  }
-
-  // Only create a new board when the user has zero boards
-  const created = await createBoard();
-  const id = created?.id as string | undefined;
-  if (id) redirect(`/board/${id}`);
-
-  // If both listing and creation fail, render a simple retry UI
   return (
-    <main className="h-[calc(100vh-3.5rem)] w-full grid place-items-center bg-white">
-      <div className="text-center">
-        <h1 className="text-lg font-semibold text-neutral-900">
-          We hit a snag
-        </h1>
-        <p className="text-sm text-neutral-600 mt-1">Please try again.</p>
-        <form action="/" method="get" className="mt-3">
-          <button className="px-3 py-2 text-sm font-medium text-white bg-neutral-900 rounded-md hover:bg-neutral-800">
-            Try Again
-          </button>
-        </form>
-      </div>
-    </main>
+    <main className="h-[calc(100vh-3.5rem)] w-full grid place-items-center bg-white" />
   );
 }

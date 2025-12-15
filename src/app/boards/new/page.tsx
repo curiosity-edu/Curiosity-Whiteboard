@@ -2,12 +2,21 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { UserAuth } from "@/context/AuthContext";
+import { database } from "@/lib/firebase";
+import { doc, setDoc } from "firebase/firestore";
 
 export default function NewBoardPage() {
   const router = useRouter();
+  const ctx = (UserAuth() as any) || [];
+  const user = ctx[0];
   const [title, setTitle] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  function makeId() {
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -19,15 +28,18 @@ export default function NewBoardPage() {
     }
     try {
       setSubmitting(true);
-      const res = await fetch("/api/boards", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: t }),
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || "Failed to create board.");
-      const id = j?.id as string;
-      if (!id) throw new Error("Board id missing.");
+      const id = makeId();
+      if (user) {
+        const now = Date.now();
+        await setDoc(doc(database, "users", user.uid, "boards", id), {
+          id,
+          title: t,
+          createdAt: now,
+          updatedAt: now,
+          items: [],
+          doc: null,
+        });
+      }
       router.replace(`/board/${id}`);
     } catch (e: any) {
       setError(e?.message || "Something went wrong.");
