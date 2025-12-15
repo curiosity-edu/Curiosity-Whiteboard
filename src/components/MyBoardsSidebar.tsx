@@ -12,11 +12,16 @@ import {
   getDocs,
   orderBy,
   query,
+  setDoc,
   updateDoc,
 } from "firebase/firestore";
 import { TbLayoutSidebarLeftCollapseFilled } from "react-icons/tb";
 import { FcAbout } from "react-icons/fc";
 import { IoIosCreate } from "react-icons/io";
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export default function MyBoardsSidebar({
   currentBoardId,
@@ -28,6 +33,8 @@ export default function MyBoardsSidebar({
   const user = ctx[0];
   const googleSignIn = ctx[1] as (() => Promise<void>) | undefined;
   const logOut = ctx[2] as (() => Promise<void>) | undefined;
+
+  const ensuredBoardRef = React.useRef(false);
 
   const [open, setOpen] = React.useState<boolean>(() => {
     try {
@@ -56,6 +63,7 @@ export default function MyBoardsSidebar({
     async function load() {
       if (!user) {
         setBoards([]);
+        ensuredBoardRef.current = false;
         return;
       }
       try {
@@ -77,6 +85,37 @@ export default function MyBoardsSidebar({
           };
         });
         if (!aborted) setBoards(list);
+
+        // If the signed-in user has no boards (first login or deleted all),
+        // auto-create a default board and navigate to it.
+        if (!aborted && list.length === 0 && !ensuredBoardRef.current) {
+          ensuredBoardRef.current = true;
+          const id = makeId();
+          const now = Date.now();
+          try {
+            await setDoc(doc(database, "users", user.uid, "boards", id), {
+              id,
+              title: "Untitled Board",
+              createdAt: now,
+              updatedAt: now,
+              items: [],
+              doc: null,
+            });
+            // Optimistically reflect it in the UI immediately.
+            setBoards([
+              {
+                id,
+                title: "Untitled Board",
+                createdAt: now,
+                updatedAt: now,
+                count: 0,
+              },
+            ]);
+            router.replace(`/board/${id}`);
+          } catch (e) {
+            console.error("[Boards] failed to auto-create default board", e);
+          }
+        }
       } catch {
         if (!aborted) setBoards([]);
       } finally {
@@ -147,8 +186,23 @@ export default function MyBoardsSidebar({
       if (currentBoardId === id) {
         // Navigate to another board if available, else home
         const remaining = boards.filter((b) => b.id !== id);
-        if (remaining.length > 0) router.push(`/board/${remaining[0].id}`);
-        else router.push("/");
+        if (remaining.length > 0) {
+          router.push(`/board/${remaining[0].id}`);
+        } else if (user) {
+          const newId = makeId();
+          const now = Date.now();
+          await setDoc(doc(database, "users", user.uid, "boards", newId), {
+            id: newId,
+            title: "Untitled Board",
+            createdAt: now,
+            updatedAt: now,
+            items: [],
+            doc: null,
+          });
+          router.push(`/board/${newId}`);
+        } else {
+          router.push("/");
+        }
       }
     } catch (e) {
       console.error("[Boards] delete failed", e);
@@ -202,7 +256,7 @@ export default function MyBoardsSidebar({
             title="Expand"
           >
             <img
-              src="/Asset%205.png"
+              src="/Asset%207.svg"
               alt="Curiosity"
               className="h-7 w-7 object-contain"
             />
@@ -229,6 +283,7 @@ export default function MyBoardsSidebar({
               onClick={async () => {
                 try {
                   await googleSignIn?.();
+                  router.push("/");
                 } catch (e) {}
               }}
               className="p-2 rounded-md hover:bg-neutral-50"
@@ -284,6 +339,7 @@ export default function MyBoardsSidebar({
               onClick={async () => {
                 try {
                   await googleSignIn?.();
+                  router.push("/");
                 } catch (e) {}
               }}
               className="p-2 rounded-md hover:bg-neutral-50"
@@ -316,7 +372,7 @@ export default function MyBoardsSidebar({
             aria-label="Curiosity Home"
           >
             <img
-              src="/textblack.png"
+              src="/textred.png"
               alt="Curiosity-edu"
               className="h-9 w-auto"
             />
@@ -404,7 +460,8 @@ export default function MyBoardsSidebar({
                     </div>
                   )}
                   <div className="text-[11px] text-neutral-500">
-                    {new Date(b.updatedAt).toLocaleString()} • {b.count} item
+                    {new Date(b.updatedAt).toLocaleString()} • {b.count}{" "}
+                    question
                     {b.count === 1 ? "" : "s"}
                   </div>
                 </button>

@@ -35,30 +35,50 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Data Model
 
-- File: `data/solve_history.json`
-- Shape: Boards. Each board is a single conversation timeline.
+- Firestore (signed-in persistence):
+  - `users/{uid}`
+  - `users/{uid}/boards/{boardId}`
+
+### User Document (`users/{uid}`)
 
 ```jsonc
 {
-  "boards": [
-    {
-      "id": "1731520123456-abc12345",
-      "title": "Algebra Practice", // Provided by user at creation time
-      "createdAt": 1731520123456,
-      "updatedAt": 1731520456789,
-      "items": [
-        {
-          "question": "…transcribed text…",
-          "response": "…AI response text…",
-          "ts": 1731520123456
-        },
-        { "question": "…", "response": "…", "ts": 1731520456789 }
-      ]
-    }
-  ]
+  "uid": "...",
+  "name": "...",
+  "email": "...",
+  "imageUrl": "...",
+  "addToCanvas": false,
+  "createdAt": "serverTimestamp()",
+  "updatedAt": "serverTimestamp()"
 }
 ```
 
+### Board Document (`users/{uid}/boards/{boardId}`)
+
+```jsonc
+{
+  "id": "1731520123456-abc12345",
+  "title": "Algebra Practice",
+  "createdAt": 1731520123456,
+  "updatedAt": 1731520456789,
+  "items": [
+    {
+      "question": "…transcribed text…",
+      "response": "…AI response text…",
+      "ts": 1731520123456
+    }
+  ],
+  "doc": {
+    /* TLDraw snapshot */
+  }
+}
+```
+
+Notes:
+
+- `items` is a list of Q/A entries (one entry per “Ask AI”).
+- `doc` is the TLDraw snapshot used to restore the canvas.
+- For signed-out users, the app does not write to Firestore.
 
 ## Prompting Rules
 
@@ -95,23 +115,34 @@ Return ONLY JSON with the keys described above.
 
 ### 0. Landing and Navigation
 
-- User lands at `GET /` → a new board is created via `POST /api/boards`, and the user is redirected to `/board/[id]` to see a blank whiteboard immediately.
+- User lands at `GET /`:
+  - Signed-in:
+    - Query `users/{uid}/boards` ordered by `updatedAt desc`.
+    - Redirect to the most recently updated board.
+    - If no boards exist, create an `Untitled Board` in Firestore and open it.
+  - Signed-out:
+    - Redirect to a fresh local board id (local-only).
 - Navigation is minimal. The app surfaces an "About Us" link (icon-only in the collapsed sidebar; text + icon in the expanded sidebar).
 - Authentication controls live in the left sidebar footer, not in a top header. In collapsed mode, a round avatar/sign‑in button appears at the bottom.
 - The My Boards history lives as a collapsible left sidebar on the board view.
-- The `/boards` route exists only to redirect to the most recent board (or `/` if none). There is no separate My Boards page in the header.
+- The `/boards` route is not used as a dedicated boards page.
 
 ### 1. Board View (`/board/[id]`)
 
 - Renders `Board` with a required `boardId` prop.
-- Left sidebar (signed-in users): `MyBoardsSidebar` lists boards from `GET /api/boards`, supports hover-delete (with confirmation), and navigation.
+- Left sidebar (signed-in users): `MyBoardsSidebar` lists boards from Firestore (`users/{uid}/boards`), supports rename/delete, and navigation.
 - Center: TLDraw canvas fills available height; bottom toolbar always visible.
 - Right: AI Panel with controls (Ask AI, Add to Canvas, History). Collapsible and persisted in `localStorage`.
+- Signed-in board persistence:
+  - On mount, load `doc` and `items` from Firestore.
+  - Autosave TLDraw snapshot (`doc`) to Firestore (debounced).
+  - Persist Q/A history (`items`) to Firestore.
 
 ### 2. Ask AI (client in `src/components/Board.tsx`)
 
 - Collects selected shapes (or all shapes if none) and exports as PNG (with padding, scale).
 - Constructs `FormData` with `image` and `boardId`.
+- Includes `history` (stringified Q/A items) so the model has context.
 - `POST /api/solve` is called; loading state is shown.
 
 ### 2b. Voice Input Flow (client in `src/components/Board.tsx`)
@@ -125,13 +156,13 @@ Return ONLY JSON with the keys described above.
 
 ### 3. Solve API (server in `src/app/api/solve/route.ts`)
 
-- Validates the upload and reads current board items from `data/solve_history.json`.
-- Sends the image and the board's prior items as JSON context to OpenAI with the system prompt.
-  - Loads `mode_detection_rules.txt` and prepends it to the system prompt.
-  - Appends the format policy + JSON keys section (unchanged) after the mode rules.
+- Validates the upload.
+- Receives optional prior history from the client (as JSON string) for context.
+- Sends the image and provided history to OpenAI with the format policy.
 - Receives JSON `{ message, question_text, ... }`.
-- Appends `{ question, response, ts }` to the specified board, updates `updatedAt`, and persists to file.
 - Returns `{ message, questionText, boardId, ... }` to the client.
+
+Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
 ### 4. Authentication
 
@@ -148,8 +179,12 @@ Return ONLY JSON with the keys described above.
 
 ### 6. Persistence
 
-- File-based store `data/solve_history.json` is read/written on each request.
-- In production, move to a real database (e.g., Firebase/Firestore) and associate boards to authenticated users.
+- Signed-in persistence:
+  - Firestore user document: `users/{uid}`
+  - Firestore boards: `users/{uid}/boards/{boardId}`
+- Signed-out:
+  - No Firestore writes.
+  - TLDraw uses client persistence for the anonymous session.
 
 ### 7. Error Handling
 
@@ -176,19 +211,21 @@ Return ONLY JSON with the keys described above.
 ## Source Files Overview
 
 - `src/app/layout.tsx` — Global layout with a fixed main viewport and white background scaffolding; content panes scroll internally.
-- `src/app/page.tsx` — Creates a new board and redirects `/` to `/board/[id]`.
+- `src/app/page.tsx` — Signed-in redirect to most recent Firestore board (or auto-create `Untitled Board`), signed-out redirects to a fresh local board.
 - `src/context/AuthContext.js` — Client auth context exposing `[user, googleSignIn, logOut]`.
-- `src/app/boards/page.tsx` — Redirects to the most recent board (or `/` if none). No separate My Boards UI.
+- `src/components/AuthControls.tsx` — Sign-in/sign-out controls (routes to `/` after auth changes).
+- `src/app/boards/new/page.tsx` — Creates a new Firestore board (signed-in) and navigates to `/board/[id]`.
+- `src/app/boards/page.tsx` — Not a boards index page (currently `notFound()`).
 - `src/components/MyBoardsSidebar.tsx` — Client sidebar listing boards, hover-delete with confirmation, navigation, and open-state persistence.
 - `src/app/board/[id]/page.tsx` — Server page that renders `<Board boardId={id} />`.
-- `src/components/Board.tsx` — Client TLDraw board + AI Panel. Sends `boardId` to `/api/solve`, shows responses, optional canvas insertion, and board History overlay.
-- `src/app/api/boards/route.ts` — `GET` list boards; `POST` create board (migrates legacy `sessions` → `boards`).
-- `src/app/api/boards/[id]/route.ts` — `GET` a single board (id, title, items). `DELETE` to remove a board.
-- `src/app/api/solve/route.ts` — Accepts `image` + `boardId`, calls OpenAI, appends `{question,response,ts}` to the board, persists to file.
-- `src/app/api/history/route.ts` — Legacy sessions endpoint (kept temporarily; UI no longer calls it).
+- `src/components/Board.tsx` — Client TLDraw board + AI Panel. Calls `/api/solve`, shows responses, and persists board state/history to Firestore when signed in.
+- `src/app/api/solve/route.ts` — Accepts `image` (+ optional `history`) and calls OpenAI. Stateless (no server-side persistence).
+- `src/app/api/boards/*` — Legacy JSON-based board endpoints (no longer used for signed-in persistence).
+- `src/app/api/history/route.ts` — Legacy sessions endpoint.
 - `src/app/globals.css` — Tailwind setup and theme tokens. Forces light background to avoid dark strips; sets body text color.
 - `src/lib/firebase.ts` — Centralized Firebase initialization and exports (auth, storage, firestore, analytics guarded for SSR).
-- `public/textblack.png` — Logo used in the left sidebar and About page.
+- `public/textred.png` — Logo used in the left sidebar and About page.
+- `public/Asset 7.svg` — Sidebar icon used for the collapsed sidebar button.
 
 ## Development Tips
 
@@ -207,11 +244,11 @@ Return ONLY JSON with the keys described above.
 
 ### Other Functionality Tasks
 
-- Fix voice input issues: should not add to whiteboard, should always be included in question transcription
-- Create the ability to detect/highlight errors in user work (annotation)
-- “Ask AI" responses should match the size of user text
+- Currently, changes to board state are saved when the user is signed in even after closing the tab. However, when the user signs out and signs in again, the whiteboard reverts to an empty state and loses all progress. This needs to be fixed.
+- Give the "Ask AI" feature the ability to detect/highlight errors in user work (ie. add annotations).
+- When added to canvas, “Ask AI" responses should match the size of user text
 
-### Deadline for Functionality Items: 12/14/2025
+### Deadline for Functionality Items: 12/15/2025
 
 #### Winter Break:
 
@@ -221,14 +258,10 @@ Return ONLY JSON with the keys described above.
 - Prepare for deployment
 - Test all features thoroughly
 
-#### Deployment:
-
-- Send email to Srividya (Cascadia)
-- Send email to UW math professors
 
 #### Second Sprint (Post Break):
 
 - Integrate Legacy Curiosity features
-  - Manim video generator (already implemented)
+  - Manim video generator (already implemented, needs to be piped in to current codebase)
   - Course generator (partially implemented)
-  - etc.
+  - Whiteboard 2.0 where the LLM has live access to the user's canvas updates and can provide real-time feedback

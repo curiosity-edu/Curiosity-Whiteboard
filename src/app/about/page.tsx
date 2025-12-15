@@ -20,7 +20,7 @@ export default function AboutPage() {
         <div className="relative min-h-[60px] mb-2">
           {/* Logo (optional) — place /public/textblack.png if available */}
           <img
-            src="/textblack.png"
+            src="/textred.png"
             alt="Curiosity Education Logo"
             className="w-[250px] h-auto"
           />

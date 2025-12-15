@@ -41,7 +41,7 @@ export default function Page() {
           const now = Date.now();
           await setDoc(doc(database, "users", user.uid, "boards", id), {
             id,
-            title: "Untitled",
+            title: "Untitled Board",
             createdAt: now,
             updatedAt: now,
             items: [],

@@ -73,9 +73,9 @@ export default function Board({ boardId }: { boardId: string }) {
   const [addToCanvas, setAddToCanvas] = React.useState<boolean>(() => {
     try {
       const v = localStorage.getItem("addToCanvas");
-      return v ? v === "true" : true;
+      return v ? v === "true" : false;
     } catch {
-      return true;
+      return false;
     }
   });
   React.useEffect(() => {

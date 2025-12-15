@@ -27,10 +27,10 @@ export const AuthContextProvider = ({ children }) => {
                     const userRef = doc(database, "users", uid);
                     const snap = await getDoc(userRef);
                     if (!snap.exists()) {
-                        let addToCanvas = true;
+                        let addToCanvas = false;
                         try {
                             const v = localStorage.getItem("addToCanvas");
-                            addToCanvas = v ? v === "true" : true;
+                            addToCanvas = v ? v === "true" : false;
                         } catch {}
                         await setDoc(userRef, {
                             uid,
