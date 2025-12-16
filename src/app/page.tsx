@@ -13,6 +13,8 @@ import {
   setDoc,
 } from "firebase/firestore";
 
+const DEFAULT_BOARD_TITLE = "Untitled Board";
+
 function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -31,17 +33,31 @@ export default function Page() {
             collection(database, "users", user.uid, "boards"),
             orderBy("updatedAt", "desc")
           );
-          const snap = await getDocs(q);
-          const first = snap.docs[0];
+
+          // When signed in, do not fall back to anonymous/local boards.
+          // Firestore reads can fail transiently during auth init; retry briefly.
+          let snap: any = null;
+          for (let i = 0; i < 3; i++) {
+            try {
+              snap = await getDocs(q);
+              break;
+            } catch {
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          }
+
+          const first = snap?.docs?.[0];
           if (first?.id) {
             if (!cancelled) router.replace(`/board/${first.id}`);
             return;
           }
+
+          // Create the default board as a fallback if none exist (or if reads failed).
           const id = makeId();
           const now = Date.now();
           await setDoc(doc(database, "users", user.uid, "boards", id), {
             id,
-            title: "Untitled Board",
+            title: DEFAULT_BOARD_TITLE,
             createdAt: now,
             updatedAt: now,
             items: [],
@@ -53,8 +69,10 @@ export default function Page() {
         const localId = makeId();
         if (!cancelled) router.replace(`/board/${localId}`);
       } catch {
+        // Signed-in users should never get routed to a local/ghost board.
+        // If signed out, it's safe to fall back to local.
         const localId = makeId();
-        if (!cancelled) router.replace(`/board/${localId}`);
+        if (!cancelled && !user) router.replace(`/board/${localId}`);
       }
     })();
     return () => {

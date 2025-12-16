@@ -9,7 +9,7 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDocs,
+  onSnapshot,
   orderBy,
   query,
   setDoc,
@@ -18,6 +18,8 @@ import {
 import { TbLayoutSidebarLeftCollapseFilled } from "react-icons/tb";
 import { FcAbout } from "react-icons/fc";
 import { IoIosCreate } from "react-icons/io";
+
+const DEFAULT_BOARD_TITLE = "Untitled Board";
 
 function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -51,6 +53,7 @@ export default function MyBoardsSidebar({
   }, [open]);
 
   const [boards, setBoards] = React.useState<any[]>([]);
+  const boardsRef = React.useRef<any[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = React.useState<string | null>(null);
@@ -59,20 +62,26 @@ export default function MyBoardsSidebar({
   const [profileOpen, setProfileOpen] = React.useState(false);
 
   React.useEffect(() => {
-    let aborted = false;
-    async function load() {
-      if (!user) {
-        setBoards([]);
-        ensuredBoardRef.current = false;
-        return;
-      }
-      try {
-        setLoading(true);
-        const q = query(
-          collection(database, "users", user.uid, "boards"),
-          orderBy("updatedAt", "desc")
-        );
-        const snap = await getDocs(q);
+    boardsRef.current = boards;
+  }, [boards]);
+
+  React.useEffect(() => {
+    if (!user) {
+      setBoards([]);
+      ensuredBoardRef.current = false;
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const q = query(
+      collection(database, "users", user.uid, "boards"),
+      orderBy("updatedAt", "desc")
+    );
+
+    const unsub = onSnapshot(
+      q,
+      async (snap) => {
         const list = snap.docs.map((d) => {
           const data: any = d.data();
           const items = Array.isArray(data?.items) ? data.items : [];
@@ -84,49 +93,48 @@ export default function MyBoardsSidebar({
             count: items.length,
           };
         });
-        if (!aborted) setBoards(list);
+
+        setBoards(list);
+        setLoading(false);
 
         // If the signed-in user has no boards (first login or deleted all),
         // auto-create a default board and navigate to it.
-        if (!aborted && list.length === 0 && !ensuredBoardRef.current) {
+        if (list.length === 0 && !ensuredBoardRef.current) {
           ensuredBoardRef.current = true;
           const id = makeId();
           const now = Date.now();
           try {
             await setDoc(doc(database, "users", user.uid, "boards", id), {
               id,
-              title: "Untitled Board",
+              title: DEFAULT_BOARD_TITLE,
               createdAt: now,
               updatedAt: now,
               items: [],
               doc: null,
             });
-            // Optimistically reflect it in the UI immediately.
-            setBoards([
-              {
-                id,
-                title: "Untitled Board",
-                createdAt: now,
-                updatedAt: now,
-                count: 0,
-              },
-            ]);
             router.replace(`/board/${id}`);
           } catch (e) {
+            // Allow retries if create failed
+            ensuredBoardRef.current = false;
             console.error("[Boards] failed to auto-create default board", e);
           }
         }
-      } catch {
-        if (!aborted) setBoards([]);
-      } finally {
-        if (!aborted) setLoading(false);
+
+        // If boards exist, allow auto-create to trigger again later if list becomes empty
+        if (list.length > 0) ensuredBoardRef.current = false;
+      },
+      (err) => {
+        console.error("[Boards] snapshot failed", err);
+        setLoading(false);
       }
-    }
-    load();
+    );
+
     return () => {
-      aborted = true;
+      try {
+        unsub();
+      } catch {}
     };
-  }, [user]);
+  }, [user, router]);
 
   // Close menus on outside click or Escape (including profile dropdown)
   React.useEffect(() => {
@@ -185,7 +193,7 @@ export default function MyBoardsSidebar({
       setBoards((prev) => prev.filter((b) => b.id !== id));
       if (currentBoardId === id) {
         // Navigate to another board if available, else home
-        const remaining = boards.filter((b) => b.id !== id);
+        const remaining = (boardsRef.current || []).filter((b) => b.id !== id);
         if (remaining.length > 0) {
           router.push(`/board/${remaining[0].id}`);
         } else if (user) {
@@ -193,12 +201,21 @@ export default function MyBoardsSidebar({
           const now = Date.now();
           await setDoc(doc(database, "users", user.uid, "boards", newId), {
             id: newId,
-            title: "Untitled Board",
+            title: DEFAULT_BOARD_TITLE,
             createdAt: now,
             updatedAt: now,
             items: [],
             doc: null,
           });
+          setBoards([
+            {
+              id: newId,
+              title: DEFAULT_BOARD_TITLE,
+              createdAt: now,
+              updatedAt: now,
+              count: 0,
+            },
+          ]);
           router.push(`/board/${newId}`);
         } else {
           router.push("/");
@@ -215,7 +232,7 @@ export default function MyBoardsSidebar({
 
   function startRename(b: any) {
     setRenamingId(b.id);
-    setTempTitle(b.title || "Untitled");
+    setTempTitle(b.title || DEFAULT_BOARD_TITLE);
     setMenuOpenId(null);
   }
 
@@ -456,12 +473,11 @@ export default function MyBoardsSidebar({
                     />
                   ) : (
                     <div className="font-medium text-neutral-900 truncate">
-                      {b.title || "Untitled"}
+                      {b.title || DEFAULT_BOARD_TITLE}
                     </div>
                   )}
                   <div className="text-[11px] text-neutral-500">
-                    {new Date(b.updatedAt).toLocaleString()} • {b.count}{" "}
-                    probe
+                    {new Date(b.updatedAt).toLocaleString()} • {b.count} probe
                     {b.count === 1 ? "" : "s"}
                   </div>
                 </button>
@@ -498,7 +514,9 @@ export default function MyBoardsSidebar({
                       onClick={() => onDeleteBoard(b.id)}
                       role="menuitem"
                       disabled={deletingId === b.id}
-                      aria-label={`Delete board ${b.title || "Untitled"}`}
+                      aria-label={`Delete board ${
+                        b.title || DEFAULT_BOARD_TITLE
+                      }`}
                     >
                       🗑️ Delete
                     </button>

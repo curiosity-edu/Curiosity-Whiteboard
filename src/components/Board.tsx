@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import {
   Tldraw,
   toRichText,
@@ -23,6 +24,7 @@ import { doc as fsDoc, getDoc, setDoc } from "firebase/firestore";
  * Users can draw or write math problems and get AI-powered solutions.
  */
 export default function Board({ boardId }: { boardId: string }) {
+  const router = useRouter();
   // Reference to the Tldraw editor instance
   const editorRef = React.useRef<Editor | null>(null);
   // Loading state for the AI request
@@ -57,6 +59,28 @@ export default function Board({ boardId }: { boardId: string }) {
 
   const ctx = (UserAuth() as any) || [];
   const user = ctx[0];
+
+  // Prevent signed-in users from staying on a local/unknown board route.
+  // If the boardId doesn't exist in Firestore, redirect to '/' so it can route
+  // to the most recently updated board or auto-create a default one.
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!user || !boardId) return;
+      try {
+        const ref = fsDoc(database, "users", user.uid, "boards", boardId);
+        const snap = await getDoc(ref);
+        if (!cancelled && !snap.exists()) {
+          router.replace("/");
+        }
+      } catch {
+        if (!cancelled) router.replace("/");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, boardId, router]);
 
   // When a user signs out, reset transient UI state so the anonymous session
   // starts blank (without affecting the signed-in Firestore persisted data).
