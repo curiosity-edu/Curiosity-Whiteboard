@@ -101,7 +101,7 @@ Return ONLY valid JSON with keys:
 - session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case).
 ```
 
-### User Prompt
+### User Prompt (image flow)
 
 ```
 Here is the prior history as JSON. Use it as context: [historyString]
@@ -109,6 +109,18 @@ Now read the math in this image and respond using the rules above.
 Important: write your response as natural text with inline math, not LaTeX/TeX. No backslashes or TeX commands.
 Return ONLY JSON with the keys described above.
 [Image: dataUrl]
+
+### User Prompt (voice-only flow)
+
+```
+
+Here is the prior history as JSON. Use it as context: [historyString]
+Now answer this question: [spoken text]
+Important: write your response as natural text with inline math, not LaTeX/TeX. No backslashes or TeX commands.
+Return ONLY JSON with the keys described above.
+
+```
+
 ```
 
 ## Program Flow
@@ -135,13 +147,14 @@ Return ONLY JSON with the keys described above.
 - Right: AI Panel with controls (Ask AI, Add to Canvas, History). Collapsible and persisted in `localStorage`.
 - Signed-in board persistence:
   - On mount, load `doc` and `items` from Firestore.
+  - TLDraw local persistence is disabled for signed-in users so Firestore is the single source of truth.
   - Autosave TLDraw snapshot (`doc`) to Firestore (debounced).
   - Persist Q/A history (`items`) to Firestore.
 
 ### 2. Ask AI (client in `src/components/Board.tsx`)
 
 - Collects selected shapes (or all shapes if none) and exports as PNG (with padding, scale).
-- Constructs `FormData` with `image` and `boardId`.
+- Constructs `FormData` with `image` (when shapes exist) and `boardId`.
 - Includes `history` (stringified Q/A items) so the model has context.
 - `POST /api/solve` is called; loading state is shown.
 
@@ -151,16 +164,17 @@ Return ONLY JSON with the keys described above.
 - **Engine**: Uses the browser Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`). No external library.
 - **Continuous listening**: `continuous = true` with an internal `keepListening` flag. On `onend`, if `keepListening` is true, recognition auto-restarts. User presses Stop to end.
 - **Results handling**: Interim and final transcripts are accumulated. On session end/restart, the spoken text is:
-  - Added to the canvas as a text note.
-  - Passed to `askAI(spoken)` so the image export is paired with the spoken question.
+  - Not added to the canvas.
+  - Passed to `askAI(spoken)` so the existing canvas snapshot (if any) is paired with the question.
+  - If the board has no shapes, a text-only request is sent (no image) and the server handles it.
 
 ### 3. Solve API (server in `src/app/api/solve/route.ts`)
 
-- Validates the upload.
+- Accepts `image` (PNG) and/or `question` (text from voice). At least one must be present.
 - Receives optional prior history from the client (as JSON string) for context.
-- Sends the image and provided history to OpenAI with the format policy.
-- Receives JSON `{ message, question_text, ... }`.
-- Returns `{ message, questionText, boardId, ... }` to the client.
+- For image requests: sends the image + history to the model.
+- For voice-only requests: sends the text question + history to the model (no image).
+- Returns JSON `{ message, questionText, boardId, ... }`.
 
 Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
@@ -182,6 +196,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 - Signed-in persistence:
   - Firestore user document: `users/{uid}`
   - Firestore boards: `users/{uid}/boards/{boardId}`
+  - TLDraw local persistence disabled; Firestore is authoritative.
 - Signed-out:
   - No Firestore writes.
   - TLDraw uses client persistence for the anonymous session.
@@ -226,42 +241,3 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 - `src/lib/firebase.ts` — Centralized Firebase initialization and exports (auth, storage, firestore, analytics guarded for SSR).
 - `public/textred.png` — Logo used in the left sidebar and About page.
 - `public/Asset 7.svg` — Sidebar icon used for the collapsed sidebar button.
-
-## Development Tips
-
-- Ensure only one version of `tldraw` libraries is bundled to avoid the “multiple instances” warning; if this appears in dev logs, check package resolution and lockfile(s).
-- In serverless deployments, replace file persistence with durable storage.
-- If a provider occasionally returns stray LaTeX, we can add an optional server-side sanitizer to strip TeX commands as a last resort.
-
-## Action Items
-
-### Meeting Recaps: [Curiosity Diaries](https://drive.google.com/drive/folders/17Z9vFGqZ38VGecYGry0HLb0c6AFYhKCR?usp=sharing)
-
-### Next Task
-
-- Add event handlers that call Firebase functions that write to the Firestore
-- Ensure that Google SSO accurately writes to the Users collection and Board creation writes to the Boards collection
-
-### Other Functionality Tasks
-
-- Currently, changes to board state are saved when the user is signed in even after closing the tab. However, when the user signs out and signs in again, the whiteboard reverts to an empty state and loses all progress. This needs to be fixed.
-- Give the "Ask AI" feature the ability to detect/highlight errors in user work (ie. add annotations).
-- When added to canvas, “Ask AI" responses should match the size of user text
-
-### Deadline for Functionality Items: 12/15/2025
-
-#### Winter Break:
-
-- Buffer to complete unfinished functionality items
-- Polish up UI/UX based on feedback
-- Comprehensively understand codebase
-- Prepare for deployment
-- Test all features thoroughly
-
-
-#### Second Sprint (Post Break):
-
-- Integrate Legacy Curiosity features
-  - Manim video generator (already implemented, needs to be piped in to current codebase)
-  - Course generator (partially implemented)
-  - Whiteboard 2.0 where the LLM has live access to the user's canvas updates and can provide real-time feedback

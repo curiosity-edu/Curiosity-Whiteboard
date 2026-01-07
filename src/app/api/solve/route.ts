@@ -1,11 +1,36 @@
 // src/app/api/solve/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 // Configure the runtime environment for the API route
 export const runtime = "nodejs";
 // Specify the OpenAI model to use (GPT-4 with vision capabilities)
 const MODEL = "gpt-4o";
+
+// Shared response format policy used in both image and voice-only flows
+const RESPONSE_FORMAT_POLICY =
+  "Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\frac, \\sec, \\tan, $$, \\[, \\], or \\( \\\)). " +
+  "Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹), and function names like sec(x), tan(x). " +
+  "When writing powers, use Unicode superscripts (e.g., x², x³) instead of caret notation. For fractions, use a slash (e.g., (a+b)/2) if needed. Keep the output readable as normal text.\n" +
+  "Keep within ~120 words unless the prompt explicitly asks for detailed explanation.\n" +
+  "You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.\n" +
+  "Return ONLY valid JSON with keys: \n" +
+  "- message: <final response text>\n" +
+  "- question_text: <your best transcription of the question>\n" +
+  "- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case).";
+
+async function loadModeDetectionRules(): Promise<string> {
+  try {
+    const rulesPath = path.join(process.cwd(), "mode_detection_rules.txt");
+    const txt = await readFile(rulesPath, "utf8");
+    const trimmed = (txt || "").trim();
+    return trimmed ? `\n\nMode Detection Rules:\n${trimmed}` : "";
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Helper function to create a JSON response with a specific status code
@@ -52,6 +77,7 @@ export async function POST(req: NextRequest) {
     // If no image was provided, allow a text-only solve (voice-only flow).
     if (!(file instanceof File)) {
       if (!question) return json(400, { error: "No 'image' file in form-data." });
+      const rules = await loadModeDetectionRules();
       const rsp = await client.chat.completions.create({
         model: MODEL,
         temperature: 0.2,
@@ -59,16 +85,7 @@ export async function POST(req: NextRequest) {
         messages: [
           {
             role: "system",
-            content:
-              "Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\frac, \\sec, \\tan, $$, \\[ , \\], or \\( \\\)). " +
-              "Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹), and function names like sec(x), tan(x). " +
-              "When writing powers, use Unicode superscripts (e.g., x², x³) instead of caret notation. For fractions, use a slash (e.g., (a+b)/2) if needed. Keep the output readable as normal text.\n" +
-              "Keep within ~120 words unless the prompt explicitly asks for detailed explanation.\n" +
-              "You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.\n" +
-              "Return ONLY valid JSON with keys: \n" +
-              "- message: <final response text>\n" +
-              "- question_text: <your best transcription of the question>\n" +
-              "- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case).",
+            content: rules + RESPONSE_FORMAT_POLICY,
           },
           {
             role: "user",
@@ -120,6 +137,7 @@ export async function POST(req: NextRequest) {
 
     // Send the image to OpenAI for processing
     // The system prompt instructs the AI on how to format its response
+    const rules = await loadModeDetectionRules();
     const rsp = await client.chat.completions.create({
       model: MODEL,
       temperature: 0.2, // Lower temperature for more deterministic responses
@@ -127,16 +145,7 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: "system",
-          content:
-            "Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\frac, \\sec, \\tan, $$, \\[, \\], or \\( \\\)). " +
-            "Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹), and function names like sec(x), tan(x). " +
-            "When writing powers, use Unicode superscripts (e.g., x², x³) instead of caret notation. For fractions, use a slash (e.g., (a+b)/2) if needed. Keep the output readable as normal text.\n" +
-            "Keep within ~120 words unless the image explicitly asks for detailed explanation.\n" +
-            "You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.\n" +
-            "Return ONLY valid JSON with keys: \n" +
-            "- message: <final response text>\n" +
-            "- question_text: <your best transcription of the question from the image>\n" +
-            "- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case)."
+          content: rules + RESPONSE_FORMAT_POLICY
         },
         {
           role: "user",
