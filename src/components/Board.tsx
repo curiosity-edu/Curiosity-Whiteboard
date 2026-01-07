@@ -27,6 +27,8 @@ export default function Board({ boardId }: { boardId: string }) {
   const router = useRouter();
   // Reference to the Tldraw editor instance
   const editorRef = React.useRef<Editor | null>(null);
+  const [editorMounted, setEditorMounted] = React.useState(false);
+  const suppressCanvasTextRef = React.useRef(false);
   // Loading state for the AI request
   const [loading, setLoading] = React.useState(false);
   // Board id is provided by the page route
@@ -162,6 +164,7 @@ export default function Board({ boardId }: { boardId: string }) {
   function stopVoiceInput() {
     try {
       keepListeningRef.current = false;
+      suppressCanvasTextRef.current = false;
       const rec = recognitionRef.current;
       if (rec && typeof rec.stop === "function") rec.stop();
     } catch (e) {
@@ -192,37 +195,55 @@ export default function Board({ boardId }: { boardId: string }) {
       editor.updateInstanceState({ isReadonly: false });
     } catch {}
     console.log("[Board] Editor mounted:", editor);
-    // Load persisted TLDraw snapshot for this board (Firestore for signed-in users)
+    setEditorMounted(true);
+  }, []);
+
+  // Load persisted TLDraw snapshot + items from Firestore when signed in.
+  // This must not live in onMount because onMount captures stale auth state.
+  React.useEffect(() => {
+    const editor = editorRef.current;
+    if (!editorMounted || !editor || !boardId) return;
+
+    let cancelled = false;
     (async () => {
-      if (!boardId) return;
       try {
+        // If signed out, rely on TLDraw local persistence (persistenceKey) and skip Firestore.
+        if (!user) {
+          if (!cancelled) setEditorReady(true);
+          return;
+        }
+
         isLoadingDocRef.current = true;
-        if (user) {
-          const ref = fsDoc(database, "users", user.uid, "boards", boardId);
-          const snap = await getDoc(ref);
-          const data: any = snap.exists() ? snap.data() : null;
-          const items = Array.isArray(data?.items)
-            ? (data.items as HistoryItem[])
-            : [];
-          setBoardItems(items);
-          if (data?.doc) {
-            try {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              loadSnapshot((editor as any).store, data.doc);
-              console.log("[Board] Loaded snapshot for", boardId);
-            } catch (e) {
-              console.warn("[Board] Failed to load snapshot:", e);
-            }
+        const ref = fsDoc(database, "users", user.uid, "boards", boardId);
+        const snap = await getDoc(ref);
+        const data: any = snap.exists() ? snap.data() : null;
+
+        const items = Array.isArray(data?.items)
+          ? (data.items as HistoryItem[])
+          : [];
+        if (!cancelled) setBoardItems(items);
+
+        if (data?.doc) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            loadSnapshot((editor as any).store, data.doc);
+            console.log("[Board] Loaded snapshot for", boardId);
+          } catch (e) {
+            console.warn("[Board] Failed to load snapshot:", e);
           }
         }
       } catch (e) {
         console.warn("[Board] load doc failed:", e);
       } finally {
         isLoadingDocRef.current = false;
-        setEditorReady(true);
+        if (!cancelled) setEditorReady(true);
       }
     })();
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editorMounted, user, boardId]);
 
   // Debounced autosave when the TLDraw store changes
   React.useEffect(() => {
@@ -231,39 +252,81 @@ export default function Board({ boardId }: { boardId: string }) {
     if (!user) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const store: any = (editor as any).store;
+
+    const saveNow = async () => {
+      if (isLoadingDocRef.current) return;
+      try {
+        const snap = getSnapshot(store);
+        const ref = fsDoc(database, "users", user.uid, "boards", boardId);
+        await setDoc(
+          ref,
+          {
+            id: boardId,
+            doc: snap,
+            updatedAt: Date.now(),
+          },
+          { merge: true }
+        );
+        console.log("[Board] autosave ok", boardId);
+      } catch (e) {
+        console.warn("[Board] autosave failed:", e);
+      }
+    };
+
     const unlisten =
-      store?.listen?.(() => {
-        if (isLoadingDocRef.current) return;
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = setTimeout(async () => {
+      store?.listen?.(
+        () => {
+          if (isLoadingDocRef.current) return;
+          if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = setTimeout(() => {
+            void saveNow();
+          }, 800);
+        },
+        {
+          // Persist only real document edits caused by the current user (including deletions).
+          // This avoids syncing noise and ensures the listener triggers for the changes we care about.
+          scope: "document",
+          source: "user",
+        }
+      ) || (() => {});
+
+    function onVisChange() {
+      if (document.hidden) {
+        if (saveTimerRef.current) {
           try {
-            const snap = getSnapshot(store);
-            const ref = fsDoc(database, "users", user.uid, "boards", boardId);
-            await setDoc(
-              ref,
-              {
-                id: boardId,
-                doc: snap,
-                updatedAt: Date.now(),
-              },
-              { merge: true }
-            );
-          } catch (e) {
-            console.warn("[Board] autosave failed:", e);
-          }
-        }, 800);
-      }) || (() => {});
+            clearTimeout(saveTimerRef.current);
+          } catch {}
+          saveTimerRef.current = null;
+        }
+        void saveNow();
+      }
+    }
+
+    try {
+      document.addEventListener("visibilitychange", onVisChange);
+    } catch {}
     return () => {
       try {
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        // Flush any pending changes before unmount / board switch.
+        if (saveTimerRef.current) {
+          try {
+            clearTimeout(saveTimerRef.current);
+          } catch {}
+          saveTimerRef.current = null;
+          void saveNow();
+        }
       } catch {}
       try {
         unlisten();
       } catch {}
+      try {
+        document.removeEventListener("visibilitychange", onVisChange);
+      } catch {}
     };
-  }, [boardId, editorReady]);
+  }, [boardId, editorReady, user]);
 
   function addResponseToCanvas(text: string) {
+    if (suppressCanvasTextRef.current) return;
     const editor = editorRef.current;
     if (!editor) return;
     const p = editor.screenToPage(editor.getViewportScreenCenter());
@@ -349,31 +412,36 @@ export default function Board({ boardId }: { boardId: string }) {
         const all = Array.from(editor.getCurrentPageShapeIds?.() ?? []);
         const shapeIds: TLShapeId[] = selection.length > 0 ? selection : all;
 
-        if (shapeIds.length === 0) {
-          alert("Draw or select the problem first.");
-          return;
-        }
-
-        // Export the selected area as an image
-        const scale = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
-        const { blob } = await editor.toImage(shapeIds, {
-          format: "png",
-          background: true,
-          padding: 24,
-          scale,
-        });
-
-        if (!blob) {
-          alert("Failed to export image.");
-          return;
-        }
-
         // Prepare the image for sending to the API
         const fd = new FormData();
-        fd.append(
-          "image",
-          new File([blob], "board.png", { type: "image/png" })
-        );
+
+        // If the user asked via voice, allow the request to proceed even if the board is empty.
+        // In that case, we omit the image entirely and let the server solve from text + history.
+        if (shapeIds.length > 0) {
+          // Export the selected area as an image
+          const scale = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
+          const { blob } = await editor.toImage(shapeIds, {
+            format: "png",
+            background: true,
+            padding: 24,
+            scale,
+          });
+
+          if (!blob) {
+            alert("Failed to export image.");
+            return;
+          }
+
+          fd.append(
+            "image",
+            new File([blob], "board.png", { type: "image/png" })
+          );
+        } else {
+          if (!questionFromVoice || !questionFromVoice.trim()) {
+            alert("Draw or select the problem first.");
+            return;
+          }
+        }
         if (boardId) fd.append("boardId", boardId);
         if (questionFromVoice && questionFromVoice.trim()) {
           fd.append("question", questionFromVoice.trim());
@@ -441,10 +509,11 @@ export default function Board({ boardId }: { boardId: string }) {
         let shouldAddToCanvas = addToCanvas;
         try {
           const stored = localStorage.getItem("addToCanvas");
-          shouldAddToCanvas = stored ? stored === "true" : true;
+          shouldAddToCanvas = stored ? stored === "true" : false;
         } catch {}
         // Optionally create a text shape with the AI response on the canvas
-        if (shouldAddToCanvas) {
+        // For voice questions, never auto-add text to the canvas.
+        if (!questionFromVoice && shouldAddToCanvas) {
           // Calculate position for the response text
           const b = getUnionBounds(editor, shapeIds);
           let x: number, y: number;
@@ -458,15 +527,14 @@ export default function Board({ boardId }: { boardId: string }) {
             x = p.x;
             y = p.y;
           }
-
+          // Create a text shape with the response
           editor.createShape<TLTextShape>({
             type: "text",
             x,
             y,
             props: {
               richText: toRichText(finalText),
-              autoSize: false,
-              w: 400,
+              autoSize: true,
             },
           });
         }
@@ -516,10 +584,11 @@ export default function Board({ boardId }: { boardId: string }) {
       rec.onend = () => {
         const spoken = (finalText || interimRef.current).trim();
         if (spoken) {
-          // Add the spoken question to the canvas like a note
-          addResponseToCanvas(spoken);
           // Ask AI with the spoken question
-          askAI(spoken);
+          suppressCanvasTextRef.current = true;
+          void (askAI(spoken) as any)?.finally?.(() => {
+            suppressCanvasTextRef.current = false;
+          });
         }
         if (keepListeningRef.current) {
           interimRef.current = "";
@@ -533,6 +602,7 @@ export default function Board({ boardId }: { boardId: string }) {
           }
         } else {
           setIsRecording(false);
+          suppressCanvasTextRef.current = false;
         }
       };
       setIsRecording(true);
@@ -580,9 +650,11 @@ export default function Board({ boardId }: { boardId: string }) {
           <Tldraw
             onMount={onMount}
             key={`${user ? user.uid : "anon"}:${boardId || "default"}`}
-            persistenceKey={`board:${user ? user.uid : "anon"}:${
-              boardId || "default"
-            }`}
+            persistenceKey={
+              user
+                ? undefined
+                : `board:${user ? user.uid : "anon"}:${boardId || "default"}`
+            }
             autoFocus
           />
         </div>

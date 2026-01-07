@@ -14,6 +14,7 @@ import {
   query,
   setDoc,
   updateDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { TbLayoutSidebarLeftCollapseFilled } from "react-icons/tb";
 import { FcAbout } from "react-icons/fc";
@@ -188,18 +189,16 @@ export default function MyBoardsSidebar({
       }
       setDeletingId(id);
       if (user) {
-        await deleteDoc(doc(database, "users", user.uid, "boards", id));
-      }
-      setBoards((prev) => prev.filter((b) => b.id !== id));
-      if (currentBoardId === id) {
-        // Navigate to another board if available, else home
         const remaining = (boardsRef.current || []).filter((b) => b.id !== id);
-        if (remaining.length > 0) {
-          router.push(`/board/${remaining[0].id}`);
-        } else if (user) {
+
+        // If deleting the last board while signed in, delete + create in a single batch
+        // to avoid races where a replacement board is created but the old one remains.
+        if (currentBoardId === id && remaining.length === 0) {
           const newId = makeId();
           const now = Date.now();
-          await setDoc(doc(database, "users", user.uid, "boards", newId), {
+          const batch = writeBatch(database);
+          batch.delete(doc(database, "users", user.uid, "boards", id));
+          batch.set(doc(database, "users", user.uid, "boards", newId), {
             id: newId,
             title: DEFAULT_BOARD_TITLE,
             createdAt: now,
@@ -207,19 +206,22 @@ export default function MyBoardsSidebar({
             items: [],
             doc: null,
           });
-          setBoards([
-            {
-              id: newId,
-              title: DEFAULT_BOARD_TITLE,
-              createdAt: now,
-              updatedAt: now,
-              count: 0,
-            },
-          ]);
+          await batch.commit();
           router.push(`/board/${newId}`);
-        } else {
-          router.push("/");
+          return;
         }
+
+        await deleteDoc(doc(database, "users", user.uid, "boards", id));
+
+        // Navigate to another board if we just deleted the active one.
+        if (currentBoardId === id) {
+          if (remaining.length > 0) router.push(`/board/${remaining[0].id}`);
+          else router.push("/");
+        }
+      } else {
+        // Signed-out: local-only UI list
+        setBoards((prev) => prev.filter((b) => b.id !== id));
+        if (currentBoardId === id) router.push("/");
       }
     } catch (e) {
       console.error("[Boards] delete failed", e);
