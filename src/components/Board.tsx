@@ -17,7 +17,7 @@ import { TbLayoutSidebarRightCollapseFilled } from "react-icons/tb";
 import { IoIosSettings } from "react-icons/io";
 import { UserAuth } from "@/context/AuthContext";
 import { database } from "@/lib/firebase";
-import { doc as fsDoc, getDoc, setDoc } from "firebase/firestore";
+import { doc as fsDoc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 
 /**
  * Board component that provides a collaborative whiteboard with AI integration.
@@ -27,7 +27,7 @@ export default function Board({ boardId }: { boardId: string }) {
   const router = useRouter();
   // Reference to the Tldraw editor instance
   const editorRef = React.useRef<Editor | null>(null);
-  const [editorMounted, setEditorMounted] = React.useState(false);
+  const [editorMountVersion, setEditorMountVersion] = React.useState(0);
   const suppressCanvasTextRef = React.useRef(false);
   // Loading state for the AI request
   const [loading, setLoading] = React.useState(false);
@@ -195,14 +195,17 @@ export default function Board({ boardId }: { boardId: string }) {
       editor.updateInstanceState({ isReadonly: false });
     } catch {}
     console.log("[Board] Editor mounted:", editor);
-    setEditorMounted(true);
+    // Force downstream effects (like Firestore snapshot load) to run against
+    // the *current* editor instance.
+    setEditorReady(false);
+    setEditorMountVersion((v) => v + 1);
   }, []);
 
   // Load persisted TLDraw snapshot + items from Firestore when signed in.
   // This must not live in onMount because onMount captures stale auth state.
   React.useEffect(() => {
     const editor = editorRef.current;
-    if (!editorMounted || !editor || !boardId) return;
+    if (!editorMountVersion || !editor || !boardId) return;
 
     let cancelled = false;
     (async () => {
@@ -223,11 +226,29 @@ export default function Board({ boardId }: { boardId: string }) {
           : [];
         if (!cancelled) setBoardItems(items);
 
-        if (data?.doc) {
+        // Smooth refresh behavior:
+        // TLDraw local persistence hydrates immediately. We only apply Firestore's snapshot
+        // if the server version is newer than what we've last edited locally.
+        let localUpdatedAt = 0;
+        try {
+          const k = `boardLocalUpdatedAt:${user.uid}:${boardId}`;
+          const v = localStorage.getItem(k);
+          localUpdatedAt = v ? Number(v) || 0 : 0;
+        } catch {}
+
+        const remoteUpdatedAt =
+          typeof data?.updatedAt === "number" ? data.updatedAt : 0;
+        const shouldApplyRemote = remoteUpdatedAt > localUpdatedAt;
+
+        if (shouldApplyRemote && data?.doc) {
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             loadSnapshot((editor as any).store, data.doc);
             console.log("[Board] Loaded snapshot for", boardId);
+            try {
+              const k = `boardLocalUpdatedAt:${user.uid}:${boardId}`;
+              localStorage.setItem(k, String(remoteUpdatedAt || Date.now()));
+            } catch {}
           } catch (e) {
             console.warn("[Board] Failed to load snapshot:", e);
           }
@@ -243,7 +264,7 @@ export default function Board({ boardId }: { boardId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [editorMounted, user, boardId]);
+  }, [editorMountVersion, user, boardId]);
 
   // Debounced autosave when the TLDraw store changes
   React.useEffect(() => {
@@ -258,15 +279,26 @@ export default function Board({ boardId }: { boardId: string }) {
       try {
         const snap = getSnapshot(store);
         const ref = fsDoc(database, "users", user.uid, "boards", boardId);
-        await setDoc(
-          ref,
-          {
-            id: boardId,
+        const now = Date.now();
+        try {
+          // IMPORTANT: use updateDoc so the `doc` map is replaced (not deep-merged).
+          // This ensures deletions are persisted (merged writes can retain deleted nested keys).
+          await updateDoc(ref, {
             doc: snap,
-            updatedAt: Date.now(),
-          },
-          { merge: true }
-        );
+            updatedAt: now,
+          });
+        } catch (e) {
+          // If the document doesn't exist yet (or update fails), fall back to setDoc to create it.
+          await setDoc(
+            ref,
+            {
+              id: boardId,
+              doc: snap,
+              updatedAt: now,
+            },
+            { merge: true }
+          );
+        }
         console.log("[Board] autosave ok", boardId);
       } catch (e) {
         console.warn("[Board] autosave failed:", e);
@@ -277,6 +309,11 @@ export default function Board({ boardId }: { boardId: string }) {
       store?.listen?.(
         () => {
           if (isLoadingDocRef.current) return;
+          // Track last local edit time so we can decide whether Firestore is newer on refresh.
+          try {
+            const k = `boardLocalUpdatedAt:${user.uid}:${boardId}`;
+            localStorage.setItem(k, String(Date.now()));
+          } catch {}
           if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
           saveTimerRef.current = setTimeout(() => {
             void saveNow();
@@ -649,12 +686,10 @@ export default function Board({ boardId }: { boardId: string }) {
         <div className="absolute inset-0 bg-white">
           <Tldraw
             onMount={onMount}
-            key={`${user ? user.uid : "anon"}:${boardId || "default"}`}
-            persistenceKey={
-              user
-                ? undefined
-                : `board:${user ? user.uid : "anon"}:${boardId || "default"}`
-            }
+            key={`${boardId || "default"}`}
+            persistenceKey={`board:${user ? user.uid : "anon"}:${
+              boardId || "default"
+            }`}
             autoFocus
           />
         </div>

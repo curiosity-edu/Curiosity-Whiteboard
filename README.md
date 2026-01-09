@@ -146,9 +146,9 @@ Return ONLY JSON with the keys described above.
 - Center: TLDraw canvas fills available height; bottom toolbar always visible.
 - Right: AI Panel with controls (Ask AI, Add to Canvas, History). Collapsible and persisted in `localStorage`.
 - Signed-in board persistence:
-  - On mount, load `doc` and `items` from Firestore.
-  - TLDraw local persistence is disabled for signed-in users so Firestore is the single source of truth.
-  - Autosave TLDraw snapshot (`doc`) to Firestore (debounced).
+  - On mount, TLDraw local persistence hydrates the canvas immediately for a smooth refresh.
+  - Then we compare a local `localUpdatedAt` (stored per board in `localStorage`) to Firestore `updatedAt`; only if Firestore is newer do we apply the remote snapshot (`loadSnapshot`).
+  - Autosave TLDraw snapshot (`doc`) to Firestore (debounced) using `updateDoc` so the entire `doc` field is replaced (not deep-merged).
   - Persist Q/A history (`items`) to Firestore.
 
 ### 2. Ask AI (client in `src/components/Board.tsx`)
@@ -193,13 +193,18 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
 ### 6. Persistence
 
-- Signed-in persistence:
+- Signed-in:
   - Firestore user document: `users/{uid}`
   - Firestore boards: `users/{uid}/boards/{boardId}`
-  - TLDraw local persistence disabled; Firestore is authoritative.
+  - TLDraw local persistence is enabled as a fast local cache (instant paint on refresh). Firestore remains authoritative via a freshness check: only apply Firestore if its `updatedAt` is newer than the local `localUpdatedAt`.
 - Signed-out:
   - No Firestore writes.
   - TLDraw uses client persistence for the anonymous session.
+
+#### Deletion persistence and merge semantics
+
+- Snapshot autosave uses `updateDoc(ref, { doc: snapshot, updatedAt })`.
+- This replaces the entire `doc` field (no deep merge), ensuring deleted shapes are actually removed from Firestore. Using `setDoc(..., { merge: true })` can leave nested keys behind and is avoided for updates. A `setDoc` fallback is used only to create a new board document if it does not yet exist.
 
 ### 7. Error Handling
 
