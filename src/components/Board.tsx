@@ -13,8 +13,6 @@ import {
 } from "tldraw";
 import "tldraw/tldraw.css";
 import MyBoardsSidebar from "@/components/MyBoardsSidebar";
-import { TbLayoutSidebarRightCollapseFilled } from "react-icons/tb";
-import { IoIosSettings } from "react-icons/io";
 import { UserAuth } from "@/context/AuthContext";
 import { database } from "@/lib/firebase";
 import { doc as fsDoc, getDoc, setDoc, updateDoc } from "firebase/firestore";
@@ -47,8 +45,6 @@ export default function Board({ boardId }: { boardId: string }) {
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [archive, setArchive] = React.useState<HistoryItem[] | null>(null);
   const historyScrollRef = React.useRef<HTMLDivElement | null>(null);
-  const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const settingsContainerRef = React.useRef<HTMLDivElement | null>(null);
   const recognitionRef = React.useRef<any | null>(null);
   const interimRef = React.useRef<string>("");
   const keepListeningRef = React.useRef<boolean>(false);
@@ -110,21 +106,6 @@ export default function Board({ boardId }: { boardId: string }) {
     } catch {}
   }, [addToCanvas]);
 
-  // Visibility of the AI Panel (collapsible). Persist to localStorage.
-  const [aiOpen, setAiOpen] = React.useState<boolean>(() => {
-    try {
-      const v = localStorage.getItem("aiOpen");
-      return v ? v !== "false" : true;
-    } catch {
-      return true;
-    }
-  });
-  React.useEffect(() => {
-    try {
-      localStorage.setItem("aiOpen", String(aiOpen));
-    } catch {}
-  }, [aiOpen]);
-
   function addAIItem(text: string, question?: string) {
     const item: AIItem = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -160,6 +141,32 @@ export default function Board({ boardId }: { boardId: string }) {
       setHistoryOpen(true);
     }
   }
+
+  React.useEffect(() => {
+    function onAddToCanvasChanged() {
+      try {
+        const v = localStorage.getItem("addToCanvas");
+        setAddToCanvas(v ? v === "true" : false);
+      } catch {}
+    }
+
+    function onOpenHistory() {
+      void openHistory();
+    }
+
+    window.addEventListener(
+      "curiosity:addToCanvasChanged" as any,
+      onAddToCanvasChanged
+    );
+    window.addEventListener("curiosity:openHistory" as any, onOpenHistory);
+    return () => {
+      window.removeEventListener(
+        "curiosity:addToCanvasChanged" as any,
+        onAddToCanvasChanged
+      );
+      window.removeEventListener("curiosity:openHistory" as any, onOpenHistory);
+    };
+  }, [openHistory]);
 
   function stopVoiceInput() {
     try {
@@ -660,22 +667,6 @@ export default function Board({ boardId }: { boardId: string }) {
     };
   }, []);
 
-  // Close AI settings menu on outside click or Escape
-  React.useEffect(() => {
-    function onDocClick() {
-      setSettingsOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setSettingsOpen(false);
-    }
-    window.addEventListener("click", onDocClick);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("click", onDocClick);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, []);
-
   return (
     <div className="absolute inset-0 flex w-full min-h-0 overflow-hidden bg-white">
       {/* My Boards Sidebar (signed-in users only) */}
@@ -693,132 +684,57 @@ export default function Board({ boardId }: { boardId: string }) {
             autoFocus
           />
         </div>
-        {/* Right-edge sidebar toggle when AI panel is closed */}
-        {!aiOpen && (
-          <div className="absolute inset-y-0 right-0 flex items-center">
+
+        {/* Top-right overlay controls + response stack */}
+        <div className="pointer-events-none absolute top-3 right-3 z-20 flex flex-col items-end gap-2">
+          <div className="pointer-events-auto flex items-center gap-2">
             <button
-              onClick={() => setAiOpen(true)}
-              className="m-2 h-9 w-9 flex items-center justify-center rounded-md border border-neutral-200 bg-white shadow-sm hover:bg-neutral-50"
-              title="Show AI Panel"
-              aria-label="Show AI Panel"
+              onClick={() => askAI()}
+              disabled={loading}
+              className="rounded-xl px-5 py-3 bg-blue-600 text-yellow-400 font-extrabold shadow-lg text-base hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+              title="Export board and ask Curiosity"
             >
-              {"<"}
+              <span className="mr-2">✋</span>
+              {loading ? "Thinking…" : "Ask Curiosity"}
+            </button>
+            <button
+              onClick={isRecording ? stopVoiceInput : startVoiceInput}
+              className={`rounded-xl px-4 py-3 font-extrabold shadow-lg text-base border border-neutral-200 transition-colors ${
+                isRecording
+                  ? "bg-red-600 text-white hover:bg-red-700"
+                  : "bg-white text-neutral-800 hover:bg-neutral-50"
+              }`}
+              title={isRecording ? "Stop voice input" : "Start voice input"}
+              aria-pressed={isRecording}
+              aria-label={
+                isRecording ? "Stop voice input" : "Start voice input"
+              }
+            >
+              <span className="mr-2">🎤</span>
+              {isRecording ? "Stop" : "Voice"}
+            </button>
+            <button
+              onClick={() => setAiItems([])}
+              disabled={aiItems.length === 0}
+              className="rounded-xl px-4 py-3 border border-neutral-200 bg-white text-neutral-800 shadow-lg text-base font-bold hover:bg-neutral-50 disabled:opacity-50"
+              title="Clear all responses"
+              aria-label="Clear all responses"
+            >
+              Clear
             </button>
           </div>
-        )}
-      </div>
 
-      {/* AI Panel (right side) */}
-      {aiOpen && (
-        <aside
-          className="relative w-72 min-w-[288px] max-w-[360px] h-full min-h-0 border-l border-neutral-200 bg-white flex flex-col"
-          style={{ pointerEvents: "auto" }}
-          aria-label="AI Panel"
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 bg-neutral-50">
-            <div className="text-sm font-semibold text-neutral-700 select-none">
-              AI Panel
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => askAI()}
-                disabled={loading}
-                className="rounded-md px-4 py-2.5 bg-blue-600 text-yellow-400 font-semibold shadow-sm text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
-                title="Export board and ask AI"
-              >
-                {loading ? "Thinking…" : "Ask AI"}
-              </button>
-              <button
-                onClick={() => setAiOpen(false)}
-                className="p-1.5 rounded-md hover:bg-neutral-50"
-                title="Collapse sidebar"
-                aria-label="Collapse sidebar"
-              >
-                <TbLayoutSidebarRightCollapseFilled className="h-5 w-5" />
-              </button>
-              <div
-                className="relative"
-                ref={settingsContainerRef}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSettingsOpen((v) => !v);
-                  }}
-                  className="p-1.5 text-neutral-500 hover:text-neutral-800"
-                  title="Settings"
-                  aria-haspopup="menu"
-                  aria-expanded={settingsOpen}
-                >
-                  <IoIosSettings className="h-5 w-5" />
-                </button>
-                {settingsOpen && (
-                  <div
-                    role="menu"
-                    aria-label="AI Panel settings"
-                    className="absolute right-0 mt-2 w-56 rounded-lg border border-neutral-200 bg-white shadow-lg p-2 z-10"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <label
-                      className="flex items-center gap-2 px-2 py-2 text-sm text-neutral-800 cursor-pointer"
-                      title="Automatically place AI responses onto the canvas"
-                    >
-                      <input
-                        type="checkbox"
-                        className="accent-blue-600"
-                        checked={addToCanvas}
-                        onChange={(e) => {
-                          setAddToCanvas(e.target.checked);
-                        }}
-                      />
-                      <span>Always add to Canvas</span>
-                    </label>
-                    <button
-                      role="menuitem"
-                      onClick={() => {
-                        setSettingsOpen(false);
-                        openHistory();
-                      }}
-                      className="w-full text-left px-2 py-2 rounded-md text-sm text-neutral-800 hover:bg-neutral-100"
-                      title="Open history"
-                    >
-                      History
-                    </button>
-                    <button
-                      role="menuitem"
-                      onClick={() => {
-                        setSettingsOpen(false);
-                        setAiItems([]);
-                      }}
-                      disabled={aiItems.length === 0}
-                      className="w-full text-left px-2 py-2 rounded-md text-sm text-neutral-800 hover:bg-neutral-100 disabled:opacity-50"
-                      title="Clear all responses"
-                    >
-                      Clear all
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Content list (notifications). Read-only: no inputs and selection disabled */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-2 select-none">
-            {aiItems.length === 0 ? (
-              <div className="text-xs text-neutral-500 mt-2">
-                Responses will appear here.
-              </div>
-            ) : (
-              aiItems.map((item) => (
+          {/* Newest responses appear at the top. Not scrollable; clear/dismiss to reveal older. */}
+          {aiItems.length > 0 && (
+            <div className="pointer-events-auto flex flex-col gap-2 items-end">
+              {aiItems.map((item) => (
                 <div
                   key={item.id}
-                  className="relative rounded-lg border border-neutral-200 bg-white shadow-sm p-3 pr-12"
+                  className="relative w-[280px] max-w-[75vw] rounded-2xl border border-neutral-200 bg-white/95 shadow-sm p-3 pr-12"
                   role="status"
                   aria-live="polite"
                 >
-                  <div className="text-xs text-neutral-400 mb-1">
+                  <div className="text-[11px] text-neutral-400 mb-1">
                     {new Date(item.ts).toLocaleTimeString()}
                   </div>
                   <div className="whitespace-pre-wrap text-sm text-neutral-900">
@@ -841,89 +757,59 @@ export default function Board({ boardId }: { boardId: string }) {
                     ×
                   </button>
                 </div>
-              ))
-            )}
-          </div>
-
-          {/* Footer: Voice input */}
-          <div className="border-t border-neutral-200 px-3 py-2 bg-white flex items-center justify-between">
-            <div className="text-[11px] text-neutral-500 select-none">
-              Voice input
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={isRecording ? stopVoiceInput : startVoiceInput}
-                className={`rounded-full px-3 py-1.5 text-sm shadow-sm transition-colors ${
-                  isRecording
-                    ? "bg-red-600 text-white hover:bg-red-700"
-                    : "bg-neutral-100 text-neutral-700 hover:bg-neutral-200"
-                }`}
-                title={isRecording ? "Stop voice input" : "Start voice input"}
-                aria-pressed={isRecording}
-                aria-label={
-                  isRecording ? "Stop voice input" : "Start voice input"
-                }
-              >
-                {isRecording ? "⏹️ Stop" : "🎤 Speak"}
-              </button>
-            </div>
-          </div>
-
-          {/* Archive overlay */}
-          {historyOpen && (
-            <div className="absolute inset-0 bg-white flex flex-col">
-              {/* History header */}
-              <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 bg-white">
-                <div className="text-sm font-semibold text-neutral-700">
-                  History
-                </div>
-                <div>
-                  <button
-                    onClick={() => setHistoryOpen(false)}
-                    className="rounded-lg border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100"
-                    title="Close history"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-              {/* History content */}
-              <div
-                ref={historyScrollRef}
-                className="flex-1 overflow-y-auto p-3 space-y-4"
-              >
-                {archive === null ? (
-                  <div className="text-xs text-neutral-500">Loading…</div>
-                ) : archive.length === 0 ? (
-                  <div className="text-xs text-neutral-500">
-                    No messages yet.
-                  </div>
-                ) : (
-                  archive.map((it, idx) => (
-                    <div key={it.ts + "-" + idx} className="space-y-2">
-                      <div className="text-[11px] text-neutral-400">
-                        {new Date(it.ts).toLocaleString()}
-                      </div>
-                      {it.question && (
-                        <div className="flex justify-end">
-                          <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-900 whitespace-pre-wrap">
-                            {it.question}
-                          </div>
-                        </div>
-                      )}
-                      <div className="flex justify-start">
-                        <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-50 border border-neutral-200 px-3 py-2 text-sm text-neutral-900 whitespace-pre-wrap">
-                          {it.response}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+              ))}
             </div>
           )}
-        </aside>
-      )}
+        </div>
+
+        {/* History sidebar (right) */}
+        {historyOpen && (
+          <aside className="pointer-events-auto absolute inset-y-0 right-0 z-30 w-[360px] max-w-[90vw] border-l border-neutral-200 bg-white shadow-lg flex flex-col">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 bg-white">
+              <div className="text-sm font-semibold text-neutral-700">
+                History
+              </div>
+              <button
+                onClick={() => setHistoryOpen(false)}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 bg-white text-neutral-800 shadow-sm text-sm hover:bg-neutral-100"
+                title="Close history"
+              >
+                Close
+              </button>
+            </div>
+            <div
+              ref={historyScrollRef}
+              className="flex-1 overflow-y-auto p-3 space-y-4"
+            >
+              {archive === null ? (
+                <div className="text-xs text-neutral-500">Loading…</div>
+              ) : archive.length === 0 ? (
+                <div className="text-xs text-neutral-500">No messages yet.</div>
+              ) : (
+                archive.map((it, idx) => (
+                  <div key={it.ts + "-" + idx} className="space-y-2">
+                    <div className="text-[11px] text-neutral-400">
+                      {new Date(it.ts).toLocaleString()}
+                    </div>
+                    {it.question && (
+                      <div className="flex justify-end">
+                        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-900 whitespace-pre-wrap">
+                          {it.question}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-50 border border-neutral-200 px-3 py-2 text-sm text-neutral-900 whitespace-pre-wrap">
+                        {it.response}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </aside>
+        )}
+      </div>
     </div>
   );
 }

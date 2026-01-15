@@ -143,8 +143,8 @@ Return ONLY JSON with the keys described above.
 
 - Renders `Board` with a required `boardId` prop.
 - Left sidebar (signed-in users): `MyBoardsSidebar` lists boards from Firestore (`users/{uid}/boards`), supports rename/delete, and navigation.
-- Center: TLDraw canvas fills available height; bottom toolbar always visible.
-- Right: AI Panel with controls (Ask AI, Add to Canvas, History). Collapsible and persisted in `localStorage`.
+- Center: TLDraw canvas fills available height; TLDraw bottom toolbar is visible (top style panel is hidden by default).
+- Top-right overlay: **Ask Curiosity** and **Voice** buttons (fixed position, do not move while panning). A floating stack of response bubbles appears under the Ask button (newest on top). Each bubble has `+` to add to canvas and `×` to dismiss; a global **Clear** button clears all.
 - Signed-in board persistence:
   - On mount, TLDraw local persistence hydrates the canvas immediately for a smooth refresh.
   - Then we compare a local `localUpdatedAt` (stored per board in `localStorage`) to Firestore `updatedAt`; only if Firestore is newer do we apply the remote snapshot (`loadSnapshot`).
@@ -160,7 +160,7 @@ Return ONLY JSON with the keys described above.
 
 ### 2b. Voice Input Flow (client in `src/components/Board.tsx`)
 
-- **Start/Stop**: The AI Panel has a `🎤 Speak / ⏹️ Stop` button.
+- **Start/Stop**: The top-right overlay has a single **Voice** button (`🎤 / Stop`).
 - **Engine**: Uses the browser Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`). No external library.
 - **Continuous listening**: `continuous = true` with an internal `keepListening` flag. On `onend`, if `keepListening` is true, recognition auto-restarts. User presses Stop to end.
 - **Results handling**: Interim and final transcripts are accumulated. On session end/restart, the spoken text is:
@@ -187,7 +187,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
 ### 5. Client Update (Board)
 
-- Shows the AI response in the AI Panel list (newest first).
+- Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles.
 - If "Add to Canvas" is enabled, adds a TLDraw text shape below the selection with `toRichText(message)`.
 - History overlay can be opened to view the entire board conversation; reads `GET /api/boards/[id]`.
 
@@ -205,6 +205,13 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
 - Snapshot autosave uses `updateDoc(ref, { doc: snapshot, updatedAt })`.
 - This replaces the entire `doc` field (no deep merge), ensuring deleted shapes are actually removed from Firestore. Using `setDoc(..., { merge: true })` can leave nested keys behind and is avoided for updates. A `setDoc` fallback is used only to create a new board document if it does not yet exist.
+
+### 8. UI Notes (Overlays and TLDraw UI)
+
+- The old right AI panel has been removed in favor of **overlay controls**.
+- The **top-right** overlay contains Ask Curiosity, Voice, and Clear; responses appear as a vertical stack beneath (newest at top).
+- **History** is accessible from the profile dropdown and opens a **right-side collapsible sidebar**.
+- The TLDraw **top style panel** is hidden by default to keep the canvas clean (only the bottom toolbar remains visible).
 
 ### 7. Error Handling
 

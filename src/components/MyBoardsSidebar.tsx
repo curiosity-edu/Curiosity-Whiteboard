@@ -337,6 +337,48 @@ export default function MyBoardsSidebar({
                   className="absolute bottom-12 left-1/2 -translate-x-1/2 z-50 rounded-md border border-neutral-200 bg-white shadow-md py-1"
                   onClick={(e) => e.stopPropagation()}
                 >
+                  <label className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="accent-blue-600"
+                      defaultChecked={(() => {
+                        try {
+                          const v = localStorage.getItem("addToCanvas");
+                          return v ? v === "true" : false;
+                        } catch {
+                          return false;
+                        }
+                      })()}
+                      onChange={(e) => {
+                        try {
+                          localStorage.setItem(
+                            "addToCanvas",
+                            String(e.target.checked)
+                          );
+                        } catch {}
+                        try {
+                          window.dispatchEvent(
+                            new Event("curiosity:addToCanvasChanged")
+                          );
+                        } catch {}
+                      }}
+                    />
+                    <span>Always add to Canvas</span>
+                  </label>
+                  <button
+                    className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
+                    onClick={() => {
+                      try {
+                        window.dispatchEvent(
+                          new Event("curiosity:openHistory")
+                        );
+                      } catch {}
+                      setProfileOpen(false);
+                    }}
+                    role="menuitem"
+                  >
+                    History
+                  </button>
                   <button
                     className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
                     onClick={async () => {
@@ -563,6 +605,46 @@ export default function MyBoardsSidebar({
                 className="absolute left-2 right-2 bottom-12 z-50 rounded-md border border-neutral-200 bg-white shadow-md py-1"
                 onClick={(e) => e.stopPropagation()}
               >
+                <label className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="accent-blue-600"
+                    defaultChecked={(() => {
+                      try {
+                        const v = localStorage.getItem("addToCanvas");
+                        return v ? v === "true" : false;
+                      } catch {
+                        return false;
+                      }
+                    })()}
+                    onChange={(e) => {
+                      try {
+                        localStorage.setItem(
+                          "addToCanvas",
+                          String(e.target.checked)
+                        );
+                      } catch {}
+                      try {
+                        window.dispatchEvent(
+                          new Event("curiosity:addToCanvasChanged")
+                        );
+                      } catch {}
+                    }}
+                  />
+                  <span>Always add to Canvas</span>
+                </label>
+                <button
+                  className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
+                  onClick={() => {
+                    try {
+                      window.dispatchEvent(new Event("curiosity:openHistory"));
+                    } catch {}
+                    setProfileOpen(false);
+                  }}
+                  role="menuitem"
+                >
+                  History
+                </button>
                 <button
                   className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
                   onClick={async () => {
