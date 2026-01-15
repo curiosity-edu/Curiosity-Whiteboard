@@ -34,6 +34,7 @@ export default function Board({ boardId }: { boardId: string }) {
   // AI panel state: list of responses shown as notifications (AI-only display)
   type AIItem = { id: string; text: string; ts: number; question?: string };
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
+  const aiScrollRef = React.useRef<HTMLDivElement | null>(null);
   type HistoryItem = { question: string; response: string; ts: number };
   type SessionMeta = {
     id: string;
@@ -120,6 +121,21 @@ export default function Board({ boardId }: { boardId: string }) {
     setAiItems((prev) => prev.filter((x) => x.id !== id));
   }
 
+  React.useEffect(() => {
+    const el = aiScrollRef.current;
+    if (!el) return;
+    // Newest messages are inserted at the top; keep the viewport pinned to the top on new items.
+    el.scrollTop = 0;
+  }, [aiItems.length]);
+
+  function renderBoldText(text: string) {
+    const parts = String(text || "").split("**");
+    return parts.map((part, i) => {
+      if (i % 2 === 1) return <strong key={i}>{part}</strong>;
+      return <React.Fragment key={i}>{part}</React.Fragment>;
+    });
+  }
+
   async function openHistory() {
     setArchive(null);
     try {
@@ -199,7 +215,12 @@ export default function Board({ boardId }: { boardId: string }) {
     editorRef.current = editor;
     try {
       // @ts-ignore - Update editor state to allow editing
-      editor.updateInstanceState({ isReadonly: false });
+      editor.updateInstanceState({ isReadonly: false, isReadOnly: false });
+      // Some TLDraw versions expose a direct helper
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyEditor: any = editor as any;
+      if (typeof anyEditor.setReadOnly === "function")
+        anyEditor.setReadOnly(false);
     } catch {}
     console.log("[Board] Editor mounted:", editor);
     // Force downstream effects (like Firestore snapshot load) to run against
@@ -521,13 +542,15 @@ export default function Board({ boardId }: { boardId: string }) {
 
         // Add to AI panel (notifications list)
         const questionText = (raw?.questionText ?? "").toString().trim();
-        addAIItem(finalText, questionText);
+        const questionForUI =
+          (questionFromVoice ?? "").toString().trim() || questionText;
+        addAIItem(finalText, questionForUI);
 
         // Persist conversation history to Firestore for signed-in users
         if (user) {
           const now = Date.now();
           const entry: HistoryItem = {
-            question: questionText,
+            question: questionForUI,
             response: finalText,
             ts: now,
           };
@@ -726,7 +749,10 @@ export default function Board({ boardId }: { boardId: string }) {
 
           {/* Newest responses appear at the top. Not scrollable; clear/dismiss to reveal older. */}
           {aiItems.length > 0 && (
-            <div className="pointer-events-auto flex flex-col gap-2 items-end">
+            <div
+              ref={aiScrollRef}
+              className="pointer-events-auto flex flex-col gap-2 items-end max-h-[60vh] overflow-y-auto pr-1"
+            >
               {aiItems.map((item) => (
                 <div
                   key={item.id}
@@ -738,7 +764,7 @@ export default function Board({ boardId }: { boardId: string }) {
                     {new Date(item.ts).toLocaleTimeString()}
                   </div>
                   <div className="whitespace-pre-wrap text-sm text-neutral-900">
-                    {item.text}
+                    {renderBoldText(item.text)}
                   </div>
                   <button
                     onClick={() => addResponseToCanvas(item.text)}

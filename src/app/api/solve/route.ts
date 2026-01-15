@@ -46,6 +46,27 @@ function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function sanitizeLatex(text: string) {
+  let s = (text || "").toString();
+  // Remove common TeX math delimiters
+  s = s.replace(/\$\$[\s\S]*?\$\$/g, (m) => m.replace(/\$\$/g, ""));
+  s = s.replace(/\$(?!\$)([\s\S]*?)(?<!\$)\$/g, "$1");
+  s = s.replace(/\\\(([\s\S]*?)\\\)/g, "$1");
+  s = s.replace(/\\\[([\s\S]*?)\\\]/g, "$1");
+
+  // Convert a few common commands to plain text / unicode
+  s = s.replace(/\\times\b/g, "×");
+  s = s.replace(/\\div\b/g, "÷");
+  s = s.replace(/\\cdot\b/g, "·");
+  s = s.replace(/\\sqrt\{([^}]*)\}/g, "√($1)");
+  s = s.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, "($1)/($2)");
+
+  // Remove remaining backslashes (TeX commands) and braces.
+  s = s.replace(/\\/g, "");
+  s = s.replace(/[{}]/g, "");
+  return s;
+}
+
 /**
  * POST handler for the /api/solve endpoint
  * Processes an image containing a math problem and returns an AI-generated solution
@@ -74,10 +95,7 @@ export async function POST(req: NextRequest) {
     // Initialize the OpenAI client
     const client = new OpenAI({ apiKey });
 
-    // If no image was provided, allow a text-only solve (voice-only flow).
-    if (!(file instanceof File)) {
-      if (!question) return json(400, { error: "No 'image' file in form-data." });
-      const rules = await loadModeDetectionRules();
+    async function solveFromTextOnly(rules: string) {
       const rsp = await client.chat.completions.create({
         model: MODEL,
         temperature: 0.2,
@@ -109,7 +127,8 @@ export async function POST(req: NextRequest) {
         return json(200, { message: raw, questionText: question, boardId });
       }
 
-      const message = (parsed?.message ?? "").toString().trim();
+      const messageRaw = (parsed?.message ?? "").toString().trim();
+      const message = sanitizeLatex(messageRaw);
       const questionText = (parsed?.question_text ?? "").toString().trim();
       const answerPlain = (parsed?.answer_plain ?? "").toString().trim();
       const answerLatex = (parsed?.answer_latex ?? "").toString().trim();
@@ -123,6 +142,13 @@ export async function POST(req: NextRequest) {
         questionText: questionText || question,
         boardId,
       });
+    }
+
+    // If no image was provided, allow a text-only solve (voice-only flow).
+    if (!(file instanceof File)) {
+      if (!question) return json(400, { error: "No 'image' file in form-data." });
+      const rules = await loadModeDetectionRules();
+      return await solveFromTextOnly(rules);
     }
 
     // Validate the uploaded file
@@ -154,7 +180,11 @@ export async function POST(req: NextRequest) {
               type: "text",
               text:
                 "Here is the prior history as JSON. Use it as context: " + historyString +
-                "\nNow read the math in this image and respond using the rules above. " +
+                (question
+                  ? "\nNow answer this question (from voice): " +
+                    question +
+                    "\nUse the image only if it contains relevant information. If the image is unclear, unrelated, or unreadable, ignore it and still answer the voice question. You MUST still answer the voice question. "
+                  : "\nNow read the math in this image and respond using the rules above. ") +
                 "Important: write your response as natural text with inline math, not LaTeX/TeX. No backslashes or TeX commands. " +
                 "Return ONLY JSON with the keys described above.",
             },
@@ -174,11 +204,12 @@ export async function POST(req: NextRequest) {
     } catch {
       // If parsing fails but we have content, wrap it as the message
       if (!raw) return json(502, { error: "Model returned no content." });
-      return json(200, { message: raw });
+      return json(200, { message: sanitizeLatex(raw), questionText: question, boardId });
     }
 
     // Extract and clean the main message
-    const message = (parsed?.message ?? "").toString().trim();
+    const messageRaw = (parsed?.message ?? "").toString().trim();
+    const message = sanitizeLatex(messageRaw);
     const questionText = (parsed?.question_text ?? "").toString().trim();
     // We no longer use AI to name boards
 
@@ -189,12 +220,24 @@ export async function POST(req: NextRequest) {
     const explanation = (parsed?.explanation ?? "").toString().trim();
 
     // Return the structured response (include questionText and boardId for UI)
+    const looksUnreadable = /could not read|can't read|cannot read|unable to read|unreadable|meaningless scribbles|could not parse|can't parse|cannot parse|unable to parse|no (?:problem|question) found|nothing (?:to solve|to answer)|image (?:is )?(?:blank|empty|unclear)/i.test(
+      message
+    );
+
+    const looksEmpty =
+      !message && !answerPlain && !answerLatex && !explanation;
+
+    if (question && (looksEmpty || looksUnreadable)) {
+      const rules = await loadModeDetectionRules();
+      return await solveFromTextOnly(rules);
+    }
+
     return json(200, { 
       message, 
       answerPlain, 
       answerLatex, 
       explanation,
-      questionText,
+      questionText: questionText || question,
       boardId,
     });
     

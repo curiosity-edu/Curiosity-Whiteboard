@@ -157,6 +157,7 @@ Return ONLY JSON with the keys described above.
 - Constructs `FormData` with `image` (when shapes exist) and `boardId`.
 - Includes `history` (stringified Q/A items) so the model has context.
 - `POST /api/solve` is called; loading state is shown.
+- The floating response stack is scrollable (max height) and auto-scrolls to the top whenever a new response arrives (newest-first ordering).
 
 ### 2b. Voice Input Flow (client in `src/components/Board.tsx`)
 
@@ -172,6 +173,8 @@ Return ONLY JSON with the keys described above.
 
 - Accepts `image` (PNG) and/or `question` (text from voice). At least one must be present.
 - Receives optional prior history from the client (as JSON string) for context.
+- Voice-first behavior: when both image and voice are present, the voice question is treated as primary; if the vision output is empty/unhelpful, the server falls back to a text-only solve to ensure the spoken question is answered.
+- Output sanitization: the server strips LaTeX/TeX from model responses to enforce the Response Format Policy before returning the final `message`.
 - For image requests: sends the image + history to the model.
 - For voice-only requests: sends the text question + history to the model (no image).
 - Returns JSON `{ message, questionText, boardId, ... }`.
@@ -187,7 +190,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
 ### 5. Client Update (Board)
 
-- Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles.
+- Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles. The stack auto-scrolls back to the top on each new response while still allowing manual scroll to older messages.
 - If "Add to Canvas" is enabled, adds a TLDraw text shape below the selection with `toRichText(message)`.
 - History overlay can be opened to view the entire board conversation; reads `GET /api/boards/[id]`.
 
@@ -229,10 +232,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
   - "New Board" uses `IoIosCreate`.
   - Hover over a board to reveal delete; confirmation precedes `DELETE /api/boards/[id]`.
 - **Canvas/Layout**: TLDraw canvas fills available space via `absolute inset-0` within a `min-h-0` flex container.
-- **AI Panel**: Collapsible right panel with Ask AI, Settings (Add to Canvas, History), and Voice controls.
-  - Collapse uses `TbLayoutSidebarRightCollapseFilled`.
-  - Settings button uses `IoIosSettings`.
-  - Toggle persists in `localStorage` under `aiOpen`. History is an in-panel overlay.
+- **AI Overlay**: Top-right overlay hosts Ask Curiosity + Voice + Clear. Responses render as a stacked, scrollable bubble list (newest first) that auto-scrolls to the top on new messages. History opens from the profile dropdown as a right-side collapsible sidebar. The "Add to Canvas" preference is stored in `localStorage`.
 - **About page**: Scrollable within the fixed layout by using a viewport-height container (`h-screen`) with `overflow-y: auto`; content is a centered readable column.
 
 ## Source Files Overview
