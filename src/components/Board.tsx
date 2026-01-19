@@ -32,7 +32,13 @@ export default function Board({ boardId }: { boardId: string }) {
   // Board id is provided by the page route
 
   // AI panel state: list of responses shown as notifications (AI-only display)
-  type AIItem = { id: string; text: string; ts: number; question?: string };
+  type AIItem = {
+    id: string;
+    text: string;
+    ts: number;
+    question?: string;
+    modeCategory?: string;
+  };
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
   const aiScrollRef = React.useRef<HTMLDivElement | null>(null);
   type HistoryItem = { question: string; response: string; ts: number };
@@ -48,6 +54,8 @@ export default function Board({ boardId }: { boardId: string }) {
   const historyScrollRef = React.useRef<HTMLDivElement | null>(null);
   const recognitionRef = React.useRef<any | null>(null);
   const interimRef = React.useRef<string>("");
+  const finalVoiceRef = React.useRef<string>("");
+  const submitVoiceOnStopRef = React.useRef<boolean>(false);
   const keepListeningRef = React.useRef<boolean>(false);
   const [isRecording, setIsRecording] = React.useState(false);
   // Autosave helpers
@@ -107,11 +115,12 @@ export default function Board({ boardId }: { boardId: string }) {
     } catch {}
   }, [addToCanvas]);
 
-  function addAIItem(text: string, question?: string) {
+  function addAIItem(text: string, question?: string, modeCategory?: string) {
     const item: AIItem = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
       question,
+      modeCategory,
       ts: Date.now(),
     };
     setAiItems((prev) => [item, ...prev]);
@@ -158,6 +167,25 @@ export default function Board({ boardId }: { boardId: string }) {
     }
   }
 
+  // If navigated here via the board tile menu's "Chat History" action,
+  // automatically open the history sidebar for this board.
+  React.useEffect(() => {
+    if (!boardId) return;
+    let shouldOpen = false;
+    try {
+      const v = localStorage.getItem("curiosity:openHistoryBoardId");
+      if (v && v === String(boardId)) shouldOpen = true;
+      if (shouldOpen) localStorage.removeItem("curiosity:openHistoryBoardId");
+    } catch {}
+
+    if (shouldOpen) {
+      // Defer slightly so routing/state settles before opening overlay.
+      setTimeout(() => {
+        void openHistory();
+      }, 0);
+    }
+  }, [boardId, user, openHistory]);
+
   React.useEffect(() => {
     function onAddToCanvasChanged() {
       try {
@@ -184,8 +212,9 @@ export default function Board({ boardId }: { boardId: string }) {
     };
   }, [openHistory]);
 
-  function stopVoiceInput() {
+  function stopVoiceInput(opts?: { submit?: boolean }) {
     try {
+      submitVoiceOnStopRef.current = Boolean(opts?.submit);
       keepListeningRef.current = false;
       suppressCanvasTextRef.current = false;
       const rec = recognitionRef.current;
@@ -195,6 +224,13 @@ export default function Board({ boardId }: { boardId: string }) {
     } finally {
       setIsRecording(false);
     }
+  }
+
+  function cancelVoiceInput() {
+    submitVoiceOnStopRef.current = false;
+    interimRef.current = "";
+    finalVoiceRef.current = "";
+    stopVoiceInput({ submit: false });
   }
 
   // Auto-scroll to bottom when viewing a session
@@ -544,7 +580,10 @@ export default function Board({ boardId }: { boardId: string }) {
         const questionText = (raw?.questionText ?? "").toString().trim();
         const questionForUI =
           (questionFromVoice ?? "").toString().trim() || questionText;
-        addAIItem(finalText, questionForUI);
+        const modeCategory = (raw?.modeCategory ?? raw?.mode_category ?? "")
+          .toString()
+          .trim();
+        addAIItem(finalText, questionForUI, modeCategory);
 
         // Persist conversation history to Firestore for signed-in users
         if (user) {
@@ -628,8 +667,9 @@ export default function Board({ boardId }: { boardId: string }) {
       const rec = new SR();
       recognitionRef.current = rec;
       interimRef.current = "";
+      finalVoiceRef.current = "";
+      submitVoiceOnStopRef.current = false;
       keepListeningRef.current = true;
-      let finalText = "";
       rec.lang = "en-US";
       rec.interimResults = true;
       rec.continuous = true;
@@ -638,7 +678,7 @@ export default function Board({ boardId }: { boardId: string }) {
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const res = event.results[i];
           if (res.isFinal) {
-            finalText += res[0].transcript + " ";
+            finalVoiceRef.current += res[0].transcript + " ";
           } else {
             interim += res[0].transcript;
           }
@@ -649,17 +689,26 @@ export default function Board({ boardId }: { boardId: string }) {
         console.error("[Voice] error:", e);
       };
       rec.onend = () => {
-        const spoken = (finalText || interimRef.current).trim();
-        if (spoken) {
-          // Ask AI with the spoken question
-          suppressCanvasTextRef.current = true;
-          void (askAI(spoken) as any)?.finally?.(() => {
-            suppressCanvasTextRef.current = false;
-          });
+        const spoken = (finalVoiceRef.current || interimRef.current).trim();
+
+        if (submitVoiceOnStopRef.current) {
+          submitVoiceOnStopRef.current = false;
+          if (spoken) {
+            suppressCanvasTextRef.current = true;
+            void (askAI(spoken) as any)?.finally?.(() => {
+              suppressCanvasTextRef.current = false;
+            });
+          }
+          interimRef.current = "";
+          finalVoiceRef.current = "";
+          setIsRecording(false);
+          suppressCanvasTextRef.current = false;
+          return;
         }
+
         if (keepListeningRef.current) {
           interimRef.current = "";
-          finalText = "";
+          finalVoiceRef.current = "";
           try {
             rec.start();
             setIsRecording(true);
@@ -667,10 +716,13 @@ export default function Board({ boardId }: { boardId: string }) {
             console.error("[Voice] restart failed:", err);
             setIsRecording(false);
           }
-        } else {
-          setIsRecording(false);
-          suppressCanvasTextRef.current = false;
+          return;
         }
+
+        interimRef.current = "";
+        finalVoiceRef.current = "";
+        setIsRecording(false);
+        suppressCanvasTextRef.current = false;
       };
       setIsRecording(true);
       rec.start();
@@ -684,6 +736,7 @@ export default function Board({ boardId }: { boardId: string }) {
     return () => {
       try {
         keepListeningRef.current = false;
+        submitVoiceOnStopRef.current = false;
         const rec = recognitionRef.current;
         if (rec && typeof rec.stop === "function") rec.stop();
       } catch {}
@@ -712,7 +765,13 @@ export default function Board({ boardId }: { boardId: string }) {
         <div className="pointer-events-none absolute top-3 right-3 z-20 flex flex-col items-end gap-2">
           <div className="pointer-events-auto flex items-center gap-2">
             <button
-              onClick={() => askAI()}
+              onClick={() => {
+                if (isRecording) {
+                  stopVoiceInput({ submit: true });
+                } else {
+                  void askAI();
+                }
+              }}
               disabled={loading}
               className="rounded-xl px-5 py-3 bg-blue-600 text-yellow-400 font-extrabold shadow-lg text-base hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
               title="Export board and ask Curiosity"
@@ -720,22 +779,27 @@ export default function Board({ boardId }: { boardId: string }) {
               <span className="mr-2">✋</span>
               {loading ? "Thinking…" : "Ask Curiosity"}
             </button>
-            <button
-              onClick={isRecording ? stopVoiceInput : startVoiceInput}
-              className={`rounded-xl px-4 py-3 font-extrabold shadow-lg text-base border border-neutral-200 transition-colors ${
-                isRecording
-                  ? "bg-red-600 text-white hover:bg-red-700"
-                  : "bg-white text-neutral-800 hover:bg-neutral-50"
-              }`}
-              title={isRecording ? "Stop voice input" : "Start voice input"}
-              aria-pressed={isRecording}
-              aria-label={
-                isRecording ? "Stop voice input" : "Start voice input"
-              }
-            >
-              <span className="mr-2">🎤</span>
-              {isRecording ? "Stop" : "Voice"}
-            </button>
+            {isRecording ? (
+              <button
+                onClick={cancelVoiceInput}
+                className="rounded-xl px-4 py-3 font-extrabold shadow-lg text-base border border-neutral-200 transition-colors bg-red-600 text-white hover:bg-red-700"
+                title="Cancel voice input"
+                aria-label="Cancel voice input"
+              >
+                <span className="mr-2">✖</span>
+                Cancel
+              </button>
+            ) : (
+              <button
+                onClick={startVoiceInput}
+                className="rounded-xl px-4 py-3 font-extrabold shadow-lg text-base border border-neutral-200 transition-colors bg-white text-neutral-800 hover:bg-neutral-50"
+                title="Start voice input"
+                aria-label="Start voice input"
+              >
+                <span className="mr-2">🎤</span>
+                Voice
+              </button>
+            )}
             <button
               onClick={() => setAiItems([])}
               disabled={aiItems.length === 0}
@@ -756,12 +820,13 @@ export default function Board({ boardId }: { boardId: string }) {
               {aiItems.map((item) => (
                 <div
                   key={item.id}
-                  className="relative w-[280px] max-w-[75vw] rounded-2xl border border-neutral-200 bg-white/95 shadow-sm p-3 pr-12"
+                  className="curiosity-ai-pop relative w-[280px] max-w-[75vw] rounded-2xl border border-neutral-200 bg-white/95 shadow-sm p-3 pr-12"
                   role="status"
                   aria-live="polite"
                 >
                   <div className="text-[11px] text-neutral-400 mb-1">
                     {new Date(item.ts).toLocaleTimeString()}
+                    {item.modeCategory ? ` • ${item.modeCategory}` : ""}
                   </div>
                   <div className="whitespace-pre-wrap text-sm text-neutral-900">
                     {renderBoldText(item.text)}

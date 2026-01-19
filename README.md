@@ -98,6 +98,7 @@ You will be given prior conversation history as a JSON array of items {question,
 Return ONLY valid JSON with keys:
 - message: <final response text>
 - question_text: <your best transcription of the question from the image>
+- mode_category: <the detected mode/category based on the user's intent>
 - session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case).
 ```
 
@@ -142,9 +143,9 @@ Return ONLY JSON with the keys described above.
 ### 1. Board View (`/board/[id]`)
 
 - Renders `Board` with a required `boardId` prop.
-- Left sidebar (signed-in users): `MyBoardsSidebar` lists boards from Firestore (`users/{uid}/boards`), supports rename/delete, and navigation.
+- Left sidebar (signed-in users): `MyBoardsSidebar` lists boards from Firestore (`users/{uid}/boards`), supports rename/delete, and navigation. Each board tile has a 3-dot menu (always visible, touch-friendly) that includes **Chat History**.
 - Center: TLDraw canvas fills available height; TLDraw bottom toolbar is visible (top style panel is hidden by default).
-- Top-right overlay: **Ask Curiosity** and **Voice** buttons (fixed position, do not move while panning). A floating stack of response bubbles appears under the Ask button (newest on top). Each bubble has `+` to add to canvas and `×` to dismiss; a global **Clear** button clears all.
+- Top-right overlay: **Ask Curiosity** and **Voice/Cancel** controls (fixed position, do not move while panning). A floating stack of response bubbles appears under the Ask button (newest on top). Each bubble has `+` to add to canvas and `×` to dismiss; a global **Clear** button clears all. New bubbles animate in subtly and show the detected mode next to the timestamp when available.
 - Signed-in board persistence:
   - On mount, TLDraw local persistence hydrates the canvas immediately for a smooth refresh.
   - Then we compare a local `localUpdatedAt` (stored per board in `localStorage`) to Firestore `updatedAt`; only if Firestore is newer do we apply the remote snapshot (`loadSnapshot`).
@@ -161,7 +162,9 @@ Return ONLY JSON with the keys described above.
 
 ### 2b. Voice Input Flow (client in `src/components/Board.tsx`)
 
-- **Start/Stop**: The top-right overlay has a single **Voice** button (`🎤 / Stop`).
+- **Start**: The top-right overlay has a **Voice** button (`🎤 Voice`) to start recording.
+- **Cancel**: While recording, the **Cancel** button stops recording and discards the transcript (no request is sent).
+- **Submit**: While recording, clicking **Ask Curiosity** stops recording and submits the spoken transcript.
 - **Engine**: Uses the browser Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`). No external library.
 - **Continuous listening**: `continuous = true` with an internal `keepListening` flag. On `onend`, if `keepListening` is true, recognition auto-restarts. User presses Stop to end.
 - **Results handling**: Interim and final transcripts are accumulated. On session end/restart, the spoken text is:
@@ -177,7 +180,7 @@ Return ONLY JSON with the keys described above.
 - Output sanitization: the server strips LaTeX/TeX from model responses to enforce the Response Format Policy before returning the final `message`.
 - For image requests: sends the image + history to the model.
 - For voice-only requests: sends the text question + history to the model (no image).
-- Returns JSON `{ message, questionText, boardId, ... }`.
+- Returns JSON `{ message, questionText, boardId, modeCategory, ... }`.
 
 Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
@@ -190,7 +193,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
 ### 5. Client Update (Board)
 
-- Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles. The stack auto-scrolls back to the top on each new response while still allowing manual scroll to older messages.
+- Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles. The stack auto-scrolls back to the top on each new response while still allowing manual scroll to older messages. New bubbles animate in and display the detected mode next to the timestamp when available.
 - If "Add to Canvas" is enabled, adds a TLDraw text shape below the selection with `toRichText(message)`.
 - History overlay can be opened to view the entire board conversation; reads `GET /api/boards/[id]`.
 
@@ -212,8 +215,8 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 ### 8. UI Notes (Overlays and TLDraw UI)
 
 - The old right AI panel has been removed in favor of **overlay controls**.
-- The **top-right** overlay contains Ask Curiosity, Voice, and Clear; responses appear as a vertical stack beneath (newest at top).
-- **History** is accessible from the profile dropdown and opens a **right-side collapsible sidebar**.
+- The **top-right** overlay contains Ask Curiosity, Voice, Cancel (while recording), and Clear; responses appear as a vertical stack beneath (newest at top).
+- **Chat History** is accessible from each board tile’s 3-dot menu and opens a **right-side collapsible sidebar**.
 - The TLDraw **top style panel** is hidden by default to keep the canvas clean (only the bottom toolbar remains visible).
 
 ### 7. Error Handling
@@ -228,12 +231,19 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 - **Global layout**: The root layout pins the app to the viewport (fixed `main` covering the screen). Scrolling happens inside panels.
 - **My Boards Sidebar**: Collapsible left sidebar (persists in `localStorage` under `boardsOpen`).
   - Collapse/expand uses `TbLayoutSidebarLeftCollapseFilled`.
+  - Each board tile includes an always-visible 3-dot menu with Chat History, Rename, and Delete (touch-friendly).
+  - "Generative Manim" uses `MdAnimation`.
   - "About Us" uses `FcAbout`.
   - "New Board" uses `IoIosCreate`.
   - Hover over a board to reveal delete; confirmation precedes `DELETE /api/boards/[id]`.
 - **Canvas/Layout**: TLDraw canvas fills available space via `absolute inset-0` within a `min-h-0` flex container.
-- **AI Overlay**: Top-right overlay hosts Ask Curiosity + Voice + Clear. Responses render as a stacked, scrollable bubble list (newest first) that auto-scrolls to the top on new messages. History opens from the profile dropdown as a right-side collapsible sidebar. The "Add to Canvas" preference is stored in `localStorage`.
+- **AI Overlay**: Top-right overlay hosts Ask Curiosity + Voice (or Cancel while recording) + Clear. Responses render as a stacked, scrollable bubble list (newest first) that auto-scrolls to the top on new messages; new bubbles animate in and show the detected mode when available. Chat History opens from the board tile menu as a right-side collapsible sidebar. The "Add to Canvas" preference is stored in `localStorage`.
 - **About page**: Scrollable within the fixed layout by using a viewport-height container (`h-screen`) with `overflow-y: auto`; content is a centered readable column.
+
+## Generative Manim (WIP)
+
+- Route: `GET /manim`
+- UI: Header + prompt input + no-op Generate button (placeholder for future work).
 
 ## Source Files Overview
 
@@ -247,6 +257,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 - `src/app/board/[id]/page.tsx` — Server page that renders `<Board boardId={id} />`.
 - `src/components/Board.tsx` — Client TLDraw board + AI Panel. Calls `/api/solve`, shows responses, and persists board state/history to Firestore when signed in.
 - `src/app/api/solve/route.ts` — Accepts `image` (+ optional `history`) and calls OpenAI. Stateless (no server-side persistence).
+- `src/app/manim/page.tsx` — Placeholder Generative Manim page (prompt input + Generate telling button).
 - `src/app/api/boards/*` — Legacy JSON-based board endpoints (no longer used for signed-in persistence).
 - `src/app/api/history/route.ts` — Legacy sessions endpoint.
 - `src/app/globals.css` — Tailwind setup and theme tokens. Forces light background to avoid dark strips; sets body text color.

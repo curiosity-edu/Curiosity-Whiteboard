@@ -26,6 +26,23 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes curiosity-ai-pop {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .curiosity-ai-pop {
+    animation: curiosity-ai-pop 1000ms ease-out;
+  }
+}
+
 .tlui-style-panel__wrapper {
   display: none !important;
 }

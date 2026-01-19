@@ -19,8 +19,8 @@ const RESPONSE_FORMAT_POLICY =
   "Return ONLY valid JSON with keys: \n" +
   "- message: <final response text>\n" +
   "- question_text: <your best transcription of the question>\n" +
+  "- mode_category: <what mode was detected in this situation>\n" +
   "- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case).";
-
 async function loadModeDetectionRules(): Promise<string> {
   try {
     const rulesPath = path.join(process.cwd(), "mode_detection_rules.txt");
@@ -65,6 +65,30 @@ function sanitizeLatex(text: string) {
   s = s.replace(/\\/g, "");
   s = s.replace(/[{}]/g, "");
   return s;
+}
+
+function parseModelJson(raw: string) {
+  const txt = (raw || "").trim();
+  if (!txt) return null;
+  try {
+    return JSON.parse(txt);
+  } catch {}
+
+  const start = txt.indexOf("{");
+  const end = txt.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const slice = txt.slice(start, end + 1);
+    try {
+      return JSON.parse(slice);
+    } catch {}
+  }
+  return null;
+}
+
+function readModeCategory(parsed: any) {
+  const v =
+    (parsed?.mode_category ?? parsed?.modeCategory ?? "").toString().trim();
+  return v;
 }
 
 /**
@@ -119,12 +143,15 @@ export async function POST(req: NextRequest) {
       });
 
       const raw = rsp.choices?.[0]?.message?.content?.trim() || "{}";
-      let parsed: any = {};
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
+      const parsed: any = parseModelJson(raw);
+      if (!parsed) {
         if (!raw) return json(502, { error: "Model returned no content." });
-        return json(200, { message: raw, questionText: question, boardId });
+        return json(200, {
+          message: sanitizeLatex(raw),
+          questionText: question,
+          boardId,
+          modeCategory: "",
+        });
       }
 
       const messageRaw = (parsed?.message ?? "").toString().trim();
@@ -133,6 +160,7 @@ export async function POST(req: NextRequest) {
       const answerPlain = (parsed?.answer_plain ?? "").toString().trim();
       const answerLatex = (parsed?.answer_latex ?? "").toString().trim();
       const explanation = (parsed?.explanation ?? "").toString().trim();
+      const modeCategory = readModeCategory(parsed);
 
       return json(200, {
         message,
@@ -141,6 +169,7 @@ export async function POST(req: NextRequest) {
         explanation,
         questionText: questionText || question,
         boardId,
+        modeCategory,
       });
     }
 
@@ -198,13 +227,15 @@ export async function POST(req: NextRequest) {
     const raw = rsp.choices?.[0]?.message?.content?.trim() || "{}";
 
     // Parse the JSON response from the AI
-    let parsed: any = {};
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      // If parsing fails but we have content, wrap it as the message
+    const parsed: any = parseModelJson(raw);
+    if (!parsed) {
       if (!raw) return json(502, { error: "Model returned no content." });
-      return json(200, { message: sanitizeLatex(raw), questionText: question, boardId });
+      return json(200, {
+        message: sanitizeLatex(raw),
+        questionText: question,
+        boardId,
+        modeCategory: "",
+      });
     }
 
     // Extract and clean the main message
@@ -218,6 +249,7 @@ export async function POST(req: NextRequest) {
     const answerPlain = (parsed?.answer_plain ?? "").toString().trim();
     const answerLatex = (parsed?.answer_latex ?? "").toString().trim();
     const explanation = (parsed?.explanation ?? "").toString().trim();
+    const modeCategory = readModeCategory(parsed);
 
     // Return the structured response (include questionText and boardId for UI)
     const looksUnreadable = /could not read|can't read|cannot read|unable to read|unreadable|meaningless scribbles|could not parse|can't parse|cannot parse|unable to parse|no (?:problem|question) found|nothing (?:to solve|to answer)|image (?:is )?(?:blank|empty|unclear)/i.test(
@@ -239,6 +271,7 @@ export async function POST(req: NextRequest) {
       explanation,
       questionText: questionText || question,
       boardId,
+      modeCategory,
     });
     
   } catch (err: any) {

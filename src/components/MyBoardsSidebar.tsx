@@ -19,6 +19,7 @@ import {
 import { TbLayoutSidebarLeftCollapseFilled } from "react-icons/tb";
 import { FcAbout } from "react-icons/fc";
 import { IoIosCreate } from "react-icons/io";
+import { MdAnimation } from "react-icons/md";
 
 const DEFAULT_BOARD_TITLE = "Untitled Board";
 
@@ -281,6 +282,14 @@ export default function MyBoardsSidebar({
             />
           </button>
           <Link
+            href="/manim"
+            className="p-2 rounded-md hover:bg-neutral-50"
+            aria-label="Generative Manim"
+            title="Generative Manim"
+          >
+            <MdAnimation className="h-5 w-5" />
+          </Link>
+          <Link
             href="/about"
             className="p-2 rounded-md hover:bg-neutral-50"
             aria-label="About Us"
@@ -367,20 +376,6 @@ export default function MyBoardsSidebar({
                   </label>
                   <button
                     className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
-                    onClick={() => {
-                      try {
-                        window.dispatchEvent(
-                          new Event("curiosity:openHistory")
-                        );
-                      } catch {}
-                      setProfileOpen(false);
-                    }}
-                    role="menuitem"
-                  >
-                    History
-                  </button>
-                  <button
-                    className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
                     onClick={async () => {
                       try {
                         await logOut?.();
@@ -448,6 +443,15 @@ export default function MyBoardsSidebar({
           </button>
         </div>
         <div className="mt-2">
+          <Link
+            href="/manim"
+            className="inline-flex items-center gap-2 text-sm text-neutral-700 hover:text-neutral-900"
+          >
+            <MdAnimation className="h-4 w-4" />
+            <span>Generative Manim</span>
+          </Link>
+        </div>
+        <div className="mt-1">
           <Link
             href="/about"
             className="inline-flex items-center gap-2 text-sm text-neutral-700 hover:text-neutral-900"
@@ -532,7 +536,7 @@ export default function MyBoardsSidebar({
                     e.stopPropagation();
                     setMenuOpenId((prev) => (prev === b.id ? null : b.id));
                   }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 hidden group-hover:flex items-center justify-center rounded-md text-neutral-500 hover:text-neutral-800 hover:bg-neutral-100 border border-transparent"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 flex items-center justify-center rounded-md text-neutral-500 hover:text-neutral-800 hover:bg-neutral-100 border border-transparent"
                   title="More options"
                   aria-haspopup="menu"
                   aria-expanded={menuOpenId === b.id}
@@ -546,6 +550,22 @@ export default function MyBoardsSidebar({
                     className="absolute right-2 top-8 z-50 w-36 rounded-md border border-neutral-200 bg-white shadow-md py-1"
                     onClick={(e) => e.stopPropagation()}
                   >
+                    <button
+                      className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
+                      onClick={() => {
+                        try {
+                          localStorage.setItem(
+                            "curiosity:openHistoryBoardId",
+                            String(b.id)
+                          );
+                        } catch {}
+                        setMenuOpenId(null);
+                        router.push(`/board/${b.id}`);
+                      }}
+                      role="menuitem"
+                    >
+                      Chat History
+                    </button>
                     <button
                       className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
                       onClick={() => startRename(b)}
@@ -633,18 +653,6 @@ export default function MyBoardsSidebar({
                   />
                   <span>Always add to Canvas</span>
                 </label>
-                <button
-                  className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
-                  onClick={() => {
-                    try {
-                      window.dispatchEvent(new Event("curiosity:openHistory"));
-                    } catch {}
-                    setProfileOpen(false);
-                  }}
-                  role="menuitem"
-                >
-                  History
-                </button>
                 <button
                   className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
                   onClick={async () => {
