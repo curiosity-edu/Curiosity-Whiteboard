@@ -40,6 +40,11 @@ export default function MyBoardsSidebar({
 
   const ensuredBoardRef = React.useRef(false);
 
+  const [newBoardOpen, setNewBoardOpen] = React.useState(false);
+  const [newBoardTitle, setNewBoardTitle] = React.useState("");
+  const [newBoardSubmitting, setNewBoardSubmitting] = React.useState(false);
+  const [newBoardError, setNewBoardError] = React.useState<string | null>(null);
+
   const [open, setOpen] = React.useState<boolean>(() => {
     try {
       const v = localStorage.getItem("boardsOpen");
@@ -144,12 +149,14 @@ export default function MyBoardsSidebar({
       setMenuOpenId(null);
       setRenamingId(null);
       setProfileOpen(false);
+      setNewBoardOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setMenuOpenId(null);
         setRenamingId(null);
         setProfileOpen(false);
+        setNewBoardOpen(false);
       }
     }
     window.addEventListener("click", onDocClick);
@@ -178,6 +185,42 @@ export default function MyBoardsSidebar({
       window.removeEventListener("keydown", onKey);
     };
   }, []);
+
+  function openNewBoard() {
+    if (!user) return;
+    setNewBoardError(null);
+    setNewBoardTitle("");
+    setNewBoardOpen(true);
+  }
+
+  async function createNewBoard() {
+    if (!user || newBoardSubmitting) return;
+    setNewBoardError(null);
+    const t = newBoardTitle.trim();
+    if (!t) {
+      setNewBoardError("Please enter a title.");
+      return;
+    }
+    try {
+      setNewBoardSubmitting(true);
+      const id = makeId();
+      const now = Date.now();
+      await setDoc(doc(database, "users", user.uid, "boards", id), {
+        id,
+        title: t,
+        createdAt: now,
+        updatedAt: now,
+        items: [],
+        doc: null,
+      });
+      setNewBoardOpen(false);
+      router.push(`/board/${id}`);
+    } catch (e: unknown) {
+      setNewBoardError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setNewBoardSubmitting(false);
+    }
+  }
 
   async function onDeleteBoard(id: string) {
     try {
@@ -298,14 +341,19 @@ export default function MyBoardsSidebar({
             <FcAbout className="h-5 w-5" />
           </Link>
           {user ? (
-            <Link
-              href="/boards/new"
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(true);
+                openNewBoard();
+              }}
               className="p-2 rounded-md hover:bg-neutral-50"
               aria-label="New Board"
               title="New Board"
+              type="button"
             >
               <IoIosCreate className="h-5 w-5" />
-            </Link>
+            </button>
           ) : (
             <button
               onClick={async () => {
@@ -467,16 +515,83 @@ export default function MyBoardsSidebar({
         </div>
         <div className="flex items-center gap-2">
           {user && (
-            <Link
-              href="/boards/new"
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openNewBoard();
+              }}
               className="inline-flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-white bg-neutral-900 rounded-md hover:bg-neutral-800"
             >
               <IoIosCreate className="h-4 w-4" />
               <span>New Board</span>
-            </Link>
+            </button>
           )}
         </div>
       </div>
+      {user && newBoardOpen && (
+        <div
+          className="absolute top-[3.25rem] right-2 left-2 z-50 rounded-md border border-neutral-200 bg-white shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-label="Create new board"
+        >
+          <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-200 bg-neutral-50 rounded-t-md">
+            <div className="text-sm font-semibold text-neutral-700 select-none">
+              New Board
+            </div>
+            <button
+              type="button"
+              onClick={() => setNewBoardOpen(false)}
+              className="px-2 py-1 text-xs font-medium text-neutral-700 bg-neutral-100 border border-neutral-300 rounded-md hover:bg-neutral-200"
+            >
+              Close
+            </button>
+          </div>
+          <div className="p-3 space-y-2">
+            <label className="block text-xs font-medium text-neutral-700">
+              Title
+            </label>
+            <input
+              type="text"
+              value={newBoardTitle}
+              onChange={(e) => setNewBoardTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  createNewBoard();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setNewBoardOpen(false);
+                }
+              }}
+              className="w-full border border-neutral-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-300"
+              placeholder="e.g., Algebra Practice"
+              autoFocus
+            />
+            {newBoardError && (
+              <div className="text-xs text-red-600">{newBoardError}</div>
+            )}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                disabled={newBoardSubmitting}
+                onClick={createNewBoard}
+                className="px-3 py-2 text-sm font-medium text-white bg-neutral-900 rounded-md hover:bg-neutral-800 disabled:opacity-50"
+              >
+                {newBoardSubmitting ? "Creating…" : "Create"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewBoardOpen(false)}
+                className="px-3 py-2 text-sm font-medium text-neutral-700 bg-neutral-100 border border-neutral-300 rounded-md hover:bg-neutral-200"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {loading ? (
           <div className="text-xs text-neutral-500 px-2 py-2">Loading…</div>
