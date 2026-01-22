@@ -16,6 +16,9 @@ import MyBoardsSidebar from "@/components/MyBoardsSidebar";
 import { UserAuth } from "@/context/AuthContext";
 import { database } from "@/lib/firebase";
 import { doc as fsDoc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 
 /**
  * Board component that provides a collaborative whiteboard with AI integration.
@@ -137,12 +140,433 @@ export default function Board({ boardId }: { boardId: string }) {
     el.scrollTop = 0;
   }, [aiItems.length]);
 
-  function renderBoldText(text: string) {
-    const parts = String(text || "").split("**");
-    return parts.map((part, i) => {
-      if (i % 2 === 1) return <strong key={i}>{part}</strong>;
-      return <React.Fragment key={i}>{part}</React.Fragment>;
+  function preprocessMath(text: string) {
+    let s = (text || "").toString();
+
+    const DEBUG_MATH = (() => {
+      try {
+        return localStorage.getItem("curiosity:debugMath") === "1";
+      } catch {
+        return false;
+      }
+    })();
+
+    function normalizeDollarDelimiters(input: string) {
+      let out = (input || "").toString();
+
+      // Convert TeX inline/display delimiters into $/$$ so remark-math can parse.
+      out = out.replace(/\\\(([^]*?)\\\)/g, (_m, inner) => {
+        return `$${String(inner).trim()}$`;
+      });
+      out = out.replace(/\\\[([^]*?)\\\]/g, (_m, inner) => {
+        return `\n\n$$${String(inner).trim()}$$\n\n`;
+      });
+
+      // Collapse any accidental $$$ or longer runs into $$.
+      out = out.replace(/\${3,}/g, "$$");
+      // Fix cases like "$$$a+b$^2...$$" where a stray $ appears right after $$.
+      out = out.replace(/\$\$\s*\$/g, "$$");
+      out = out.replace(/\$\s*\$\$/g, "$$");
+
+      // Fix split inline math like "$a+b$^2" or "$a+b$²" by merging into a single math span.
+      out = out.replace(/\$([^$\n]+?)\$\s*\^\s*([0-9]+)/g, (_m, body, exp) => {
+        return `$${String(body).trim()}^${String(exp).trim()}$`;
+      });
+      out = out.replace(/\$([^$\n]+?)\$\s*([²³])/g, (_m, body, sup) => {
+        const e = sup === "²" ? "2" : sup === "³" ? "3" : "";
+        if (!e) return _m;
+        return `$${String(body).trim()}^${e}$`;
+      });
+
+      function looksLikeProse(t: string) {
+        // If it has multi-letter words and sentence punctuation, it's probably prose.
+        // IMPORTANT: ignore LaTeX command names like "\\mathbf" or "\\nabla" when deciding.
+        const stripped = (t || "")
+          .replace(/\\[A-Za-z]+/g, " ")
+          .replace(/[{}]/g, " ");
+        const hasWord = /\b[a-zA-Z]{3,}\b/.test(stripped);
+        const hasSentence = /[.!?]/.test(t);
+        return hasWord && hasSentence;
+      }
+
+      // Repair $$...$$ blocks:
+      // - If they contain nested $, strip nested $.
+      // - If they contain prose, extract the leading math segment and keep prose outside.
+      out = out.replace(/\$\$([\s\S]*?)\$\$/g, (m, innerRaw, idx, full) => {
+        const inner = String(innerRaw);
+        const noNested = inner.replace(/\$/g, "").trim();
+
+        const sFull = String(full);
+        const before =
+          typeof idx === "number" && idx > 0 ? sFull.slice(idx - 1, idx) : "";
+        const after =
+          typeof idx === "number" && idx + m.length < sFull.length
+            ? sFull.slice(idx + m.length, idx + m.length + 1)
+            : "";
+        const isInlineContext =
+          (before && before !== "\n") || (after && after !== "\n");
+
+        const hasStrongMathSignal =
+          /\\(frac|sqrt|sum|int|oint|iint|iiint|nabla|partial|cdot|times|mathbf|left|right)\b/.test(
+            inner,
+          ) || /[=^_]/.test(noNested);
+
+        // If $$...$$ is used inline within a sentence, treat it as inline math.
+        // Otherwise remark-math parsing is brittle and we risk mangling it.
+        if (
+          isInlineContext &&
+          !noNested.includes("\n") &&
+          noNested.length < 240
+        ) {
+          return `$${noNested}$`;
+        }
+
+        // If the model incorrectly wrapped a full sentence in $$...$$, unwrap it.
+        // But never unwrap blocks that have strong math signals (e.g. Stokes).
+        if (!hasStrongMathSignal && looksLikeProse(noNested)) {
+          // Try to extract a leading equation-like chunk, stopping before common prose linkers.
+          // Example: "a+b^2 = a^2 + b^2 is that it doesn't..." -> "$a+b^2 = a^2 + b^2$ is that it doesn't..."
+          const linkerMatch = noNested.match(
+            /\b(is|are|was|were|that|which|because|since)\b/i,
+          );
+          const cutIdx = linkerMatch?.index;
+          if (typeof cutIdx === "number" && cutIdx > 0) {
+            const left = noNested.slice(0, cutIdx).trim();
+            const right = noNested.slice(cutIdx).trim();
+            if (left && /[=^_]/.test(left)) {
+              return `$${left}$ ${right}`;
+            }
+          }
+          return noNested;
+        }
+
+        // Otherwise, keep as display math (ensure on its own lines).
+        return `\n\n$$\n${noNested}\n$$\n\n`;
+      });
+
+      // If $$...$$ occurs inline inside a sentence, treat it as inline math $...$
+      // so remark-math can reliably parse it.
+      out = out.replace(/\$\$([^\n]+?)\$\$/g, (m, inner, idx, full) => {
+        const before = idx > 0 ? String(full).slice(idx - 1, idx) : "";
+        const after =
+          idx + m.length < String(full).length
+            ? String(full).slice(idx + m.length, idx + m.length + 1)
+            : "";
+        const isInline =
+          (before && before !== "\n") || (after && after !== "\n");
+        if (!isInline) return m;
+        return `$${String(inner).trim()}$`;
+      });
+      return out;
+    }
+
+    s = normalizeDollarDelimiters(s);
+
+    function mapOutsideMathAndCode(
+      input: string,
+      fn: (chunk: string) => string,
+    ) {
+      return input
+        .split(/(```[\s\S]*?```|`[^`]*`|\$\$[\s\S]*?\$\$|\$[^$\n]*\$)/g)
+        .map((chunk) => {
+          if (!chunk) return chunk;
+          if (chunk.startsWith("```") || chunk.startsWith("`")) return chunk;
+          if (chunk.startsWith("$$") && chunk.endsWith("$$")) return chunk;
+          if (chunk.startsWith("$") && chunk.endsWith("$")) return chunk;
+          return fn(chunk);
+        })
+        .join("");
+    }
+
+    function wrapLatexRuns(input: string) {
+      return mapOutsideMathAndCode(input, (chunk) => {
+        const normalized = chunk
+          .replace(/\\mathbf\b/g, "\\mathbf")
+          .replace(/\\d\b/g, "d");
+
+        const cmd =
+          "\\\\(?:int|oint|iint|iiint|nabla|partial|mathbf|cdot|times|frac|sqrt|left|right)\\b";
+        const hasMathSignal = (t: string) =>
+          /=/.test(t) || /\\\\(cdot|times)\\b/.test(t) || /[_^]/.test(t);
+
+        let out = normalized;
+
+        out = out.replace(
+          new RegExp(
+            `(${cmd}[\\s\\S]*?)(?=(\\n\\s*\\n)|(\\.\\s+(?=[A-Z][a-z]))|$)`,
+            "g",
+          ),
+          (_m, body) => {
+            const t = String(body).trim();
+            if (!t) return body;
+            if (!hasMathSignal(t)) return body;
+            if (t.length > 1600) return body;
+            return `\n\n$$\n${t}\n$$\n\n`;
+          },
+        );
+
+        out = out.replace(
+          /(\([^\)\n]{1,80}\)\s*(?:\^\s*\d+|[²³])\s*=\s*[^\n\.]{1,180})/g,
+          (m) => {
+            const t = String(m).trim();
+            if (!t) return m;
+            return `$${t}$`;
+          },
+        );
+
+        out = out.replace(
+          /\(\s*([^\)]+?)\s*\)\s*(?:\^\s*([0-9]+)|([²³]))/g,
+          (m, inner, expCaret, expSup) => {
+            if (String(m).includes("$")) return m;
+            const v = String(inner);
+            const e =
+              typeof expCaret === "string" && expCaret
+                ? expCaret
+                : expSup === "²"
+                  ? "2"
+                  : expSup === "³"
+                    ? "3"
+                    : "";
+            if (!e) return m;
+            if (!/[+\-*/=^_]/.test(v)) return m;
+            return `$(${v.trim()})^${e}$`;
+          },
+        );
+
+        return out;
+      });
+    }
+
+    // The model already produces well-formed math most of the time.
+    // At this stage, we only:
+    // 1) normalize delimiters (\( \)/\[ \]/malformed $$)
+    // 2) wrap raw TeX command runs that leaked outside math
+    // Further heuristic rewrites below have proven destructive (they can break correct $$ blocks).
+    s = wrapLatexRuns(s);
+    s = normalizeDollarDelimiters(s);
+
+    if (DEBUG_MATH) {
+      try {
+        console.log("[math][debug] preprocessMath output:", s);
+      } catch {}
+    }
+
+    return s;
+
+    function looksMathy(inner: string) {
+      const t = (inner || "").trim();
+      if (!t) return false;
+      // Must contain a math operator / latex command.
+      const hasMathSignal =
+        /[=^_]/.test(t) ||
+        /[+\-*/]/.test(t) ||
+        /\\(frac|sqrt|sum|int|oint|iint|iiint|nabla|partial|cdot|times|mathbf|vec|pi|theta|lambda|Delta|Gamma)\b/.test(
+          t,
+        );
+      if (!hasMathSignal) return false;
+      // Avoid wrapping normal sentences like "(this is a note)".
+      const looksLikeSentence = /[a-zA-Z]{3,}.*\s+[a-zA-Z]{3,}/.test(t);
+      if (looksLikeSentence) return false;
+      // Only allow a conservative set of characters.
+      if (!/^[0-9A-Za-z\s+\-*/^_=().,\\]+$/.test(t)) return false;
+      return true;
+    }
+
+    // If the model outputs latex-like tokens without $...$, wrap common patterns so KaTeX can render.
+    // Example: sum_k=1^100 k  -> $\sum_{k=1}^{100} k$
+    s = s.replace(
+      /(^|\s)sum_([A-Za-z])\s*=\s*([0-9]+)\s*\^\s*([0-9]+)\s*([A-Za-z])?(?=\s|$)/g,
+      (_m, pre, idx, a, b, tail) =>
+        `${pre}$\\sum_{${idx}=${a}}^{${b}}${tail ? " " + tail : ""}$`,
+    );
+
+    // Wrap standalone LaTeX-looking lines into display math early, BEFORE we try
+    // to wrap parenthesized sub-expressions. This avoids fragmenting equations like Stokes'.
+    s = s
+      .split("\n")
+      .map((line) => {
+        const t = line.trim();
+        if (!t) return line;
+        if (t.includes("$$") || t.includes("$") || t.startsWith("```"))
+          return line;
+        const startsWithMathCommand =
+          /^\\(int|oint|iint|iiint|sum|prod|lim|nabla|partial|frac|sqrt)\b/.test(
+            t,
+          );
+        const equationLike =
+          /\S/.test(t) &&
+          /=/.test(t) &&
+          /\\(int|oint|iint|iiint|nabla|partial|cdot|times|mathbf)\b/.test(t);
+        const looksLatex =
+          /\\(frac|sqrt|sum|int|oint|iint|iiint|left|right|nabla|partial|cdot|times|mathbf)\b/.test(
+            t,
+          ) || /[_^]/.test(t);
+        const looksLikeSentence = /[a-zA-Z].*\s+[a-zA-Z]/.test(t);
+        if (startsWithMathCommand) return `\n\n$$${t}$$\n\n`;
+        if (equationLike) return `\n\n$$${t}$$\n\n`;
+        if (looksLatex && !looksLikeSentence) return `\n\n$$${t}$$\n\n`;
+        return line;
+      })
+      .join("\n");
+
+    // Convert common "math in brackets" patterns into display math.
+    // Example: [(a+b)^2 = a^2 + 2ab + b^2.] -> $$ (a+b)^2 = a^2 + 2ab + b^2. $$
+    function mapOutsideDisplayMathBlocks(
+      input: string,
+      fn: (chunk: string) => string,
+    ) {
+      return input
+        .split(/(\$\$[\s\S]*?\$\$)/g)
+        .map((chunk) => {
+          if (chunk.startsWith("$$") && chunk.endsWith("$$")) return chunk;
+          return fn(chunk);
+        })
+        .join("");
+    }
+
+    s = mapOutsideDisplayMathBlocks(s, (chunk) => {
+      return chunk.replace(/\[\s*([^\]]+?)\s*\]/g, (m, inner) => {
+        if (String(inner).includes("$")) return m;
+        if (!looksMathy(inner)) return m;
+        return `\n\n$$${String(inner).replace(/\$/g, "")}$$\n\n`;
+      });
     });
+
+    // Convert double-parenthesized math like ((a+b)^2 = a^2 + b^2) into display math.
+    s = mapOutsideDisplayMathBlocks(s, (chunk) => {
+      return chunk.replace(/\(\(\s*([^\)]{3,}?)\s*\)\)/g, (m, inner) => {
+        if (String(inner).includes("$")) return m;
+        if (!looksMathy(inner)) return m;
+        return `\n\n$$${String(inner).replace(/\$/g, "")}$$\n\n`;
+      });
+    });
+
+    // Wrap ( ... )^n as a single inline math chunk so we don't end up with "$a+b$^2".
+    s = mapOutsideDisplayMathBlocks(s, (chunk) => {
+      return chunk.replace(
+        /\(\s*([^\)]+?)\s*\)\s*(?:\^\s*({[^}]+}|[0-9]+)|([²³]))/g,
+        (_m, base, expCaret, expSup) => {
+          const b = String(base).replace(/\$/g, "").trim();
+          const eRaw =
+            typeof expCaret === "string" && expCaret
+              ? expCaret
+              : expSup === "²"
+                ? "2"
+                : expSup === "³"
+                  ? "3"
+                  : "";
+          const e = String(eRaw).replace(/\$/g, "").trim();
+          if (!e) return _m;
+          if (!looksMathy(`${b}^${e}`)) {
+            return expSup ? `(${base})^${e}` : `(${base})^${expCaret}`;
+          }
+          return `$(${b})^${e}$`;
+        },
+      );
+    });
+
+    // Convert single parenthesized math terms like (2ab) into inline math.
+    // IMPORTANT: avoid wrapping (a+b) by itself, since that breaks (a+b)^2.
+    s = mapOutsideDisplayMathBlocks(s, (chunk) => {
+      return chunk.replace(/\(\s*([^\)]+?)\s*\)/g, (m, inner, idx, full) => {
+        const v = String(inner);
+        if (v.includes("$")) return m;
+        // If immediately followed by an exponent, let the ( ... )^n rule handle it.
+        const after =
+          typeof idx === "number"
+            ? String(full).slice(
+                idx + String(m).length,
+                idx + String(m).length + 6,
+              )
+            : "";
+        if (/^\s*\^/.test(after)) return m;
+
+        // Only wrap term-like parens: contains digits, LaTeX command, or '='.
+        const termLike =
+          /\d/.test(v) || /\\[A-Za-z]+/.test(v) || v.includes("=");
+        if (!termLike) return m;
+        if (!looksMathy(v)) return m;
+        if (v.includes("=")) return `\n\n$$${v.replace(/\$/g, "")}$$\n\n`;
+        return `$${v.replace(/\$/g, "")}$`;
+      });
+    });
+
+    // Generic fallback: if a line looks like pure math and contains ^ or _ or \\frac/\\sqrt, wrap as display math.
+    s = s
+      .split("\n")
+      .map((line) => {
+        const t = line.trim();
+        if (!t) return line;
+        if (t.includes("$$") || t.includes("$") || t.startsWith("```"))
+          return line;
+        const startsWithMathCommand =
+          /^\\(int|oint|iint|iiint|sum|prod|lim|nabla|partial|frac|sqrt)\b/.test(
+            t,
+          );
+        const equationLike =
+          /\S/.test(t) &&
+          /=/.test(t) &&
+          /\\(int|oint|iint|iiint|nabla|partial|cdot|times|mathbf)\b/.test(t);
+        const looksLatex =
+          /\\(frac|sqrt|sum|int|oint|iint|iiint|left|right|nabla|partial|cdot|times|mathbf)\b/.test(
+            t,
+          ) || /[_^]/.test(t);
+        const looksLikeSentence = /[a-zA-Z].*\s+[a-zA-Z]/.test(t);
+        if (startsWithMathCommand) return `\n\n$$${t}$$\n\n`;
+        if (equationLike) return `\n\n$$${t}$$\n\n`;
+        if (looksLatex && !looksLikeSentence) return `\n\n$$${t}$$\n\n`;
+        return line;
+      })
+      .join("\n");
+
+    s = wrapLatexRuns(s);
+    s = normalizeDollarDelimiters(s);
+
+    if (DEBUG_MATH) {
+      try {
+        console.log("[math][debug] preprocessMath output:", s);
+      } catch {}
+    }
+
+    return s;
+  }
+
+  function renderMessage(text: string) {
+    const raw = (text || "").toString();
+    let debug = false;
+    try {
+      debug = localStorage.getItem("curiosity:debugMath") === "1";
+    } catch {}
+    if (debug) {
+      try {
+        console.log("[math][debug] raw message:", raw);
+      } catch {}
+    }
+    const v = preprocessMath(raw);
+    if (debug) {
+      try {
+        console.log("[math][debug] rendered markdown source:", v);
+        console.log(
+          "[math][debug] tip: set localStorage curiosity:debugMath=0 to disable",
+        );
+      } catch {}
+    }
+    return (
+      <ReactMarkdown
+        remarkPlugins={[remarkMath]}
+        rehypePlugins={[rehypeKatex] as any}
+        components={{
+          p: (props) => (
+            <p className="whitespace-pre-wrap leading-6">{props.children}</p>
+          ),
+          strong: (props) => (
+            <strong className="font-semibold">{props.children}</strong>
+          ),
+        }}
+      >
+        {v}
+      </ReactMarkdown>
+    );
   }
 
   async function openHistory() {
@@ -200,13 +624,13 @@ export default function Board({ boardId }: { boardId: string }) {
 
     window.addEventListener(
       "curiosity:addToCanvasChanged" as any,
-      onAddToCanvasChanged
+      onAddToCanvasChanged,
     );
     window.addEventListener("curiosity:openHistory" as any, onOpenHistory);
     return () => {
       window.removeEventListener(
         "curiosity:addToCanvasChanged" as any,
-        onAddToCanvasChanged
+        onAddToCanvasChanged,
       );
       window.removeEventListener("curiosity:openHistory" as any, onOpenHistory);
     };
@@ -360,7 +784,7 @@ export default function Board({ boardId }: { boardId: string }) {
               doc: snap,
               updatedAt: now,
             },
-            { merge: true }
+            { merge: true },
           );
         }
         console.log("[Board] autosave ok", boardId);
@@ -388,7 +812,7 @@ export default function Board({ boardId }: { boardId: string }) {
           // This avoids syncing noise and ensures the listener triggers for the changes we care about.
           scope: "document",
           source: "user",
-        }
+        },
       ) || (() => {});
 
     function onVisChange() {
@@ -535,7 +959,7 @@ export default function Board({ boardId }: { boardId: string }) {
 
           fd.append(
             "image",
-            new File([blob], "board.png", { type: "image/png" })
+            new File([blob], "board.png", { type: "image/png" }),
           );
         } else {
           if (!questionFromVoice || !questionFromVoice.trim()) {
@@ -604,7 +1028,7 @@ export default function Board({ boardId }: { boardId: string }) {
                 updatedAt: now,
                 items: nextItems,
               },
-              { merge: true }
+              { merge: true },
             );
           } catch (e) {
             console.warn("[Board] failed to persist items:", e);
@@ -651,7 +1075,7 @@ export default function Board({ boardId }: { boardId: string }) {
         setLoading(false);
       }
     },
-    [addToCanvas, boardItems, user]
+    [addToCanvas, boardItems, user],
   );
 
   // Voice input: start/stop recognition
@@ -829,7 +1253,9 @@ export default function Board({ boardId }: { boardId: string }) {
                     {item.modeCategory ? ` • ${item.modeCategory}` : ""}
                   </div>
                   <div className="whitespace-pre-wrap text-sm text-neutral-900">
-                    {renderBoldText(item.text)}
+                    <div className="curiosity-math-box text-sm text-neutral-900">
+                      {renderMessage(item.text)}
+                    </div>
                   </div>
                   <button
                     onClick={() => addResponseToCanvas(item.text)}
@@ -891,7 +1317,9 @@ export default function Board({ boardId }: { boardId: string }) {
                     )}
                     <div className="flex justify-start">
                       <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-50 border border-neutral-200 px-3 py-2 text-sm text-neutral-900 whitespace-pre-wrap">
-                        {it.response}
+                        <div className="curiosity-math-box">
+                          {renderMessage(it.response)}
+                        </div>
                       </div>
                     </div>
                   </div>

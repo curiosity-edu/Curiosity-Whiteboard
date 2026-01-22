@@ -47,6 +47,19 @@ body {
   display: none !important;
 }
 
+.curiosity-math-box .katex-display {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  background: #fafafa;
+  overflow-x: auto;
+}
+
+.curiosity-math-box .katex {
+  font-size: 1em;
+}
+
 .tlui-style-panel {
   display: none !important;
 }

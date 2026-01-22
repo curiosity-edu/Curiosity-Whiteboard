@@ -9,11 +9,16 @@ export const runtime = "nodejs";
 // Specify the OpenAI model to use (GPT-4 with vision capabilities)
 const MODEL = "gpt-4o";
 
+const DEBUG_SOLVE =
+  (process.env.CURIOSITY_DEBUG_SOLVE || "").toString().trim() === "1";
+
 // Shared response format policy used in both image and voice-only flows
 const RESPONSE_FORMAT_POLICY =
-  "Response format policy: DO NOT use LaTeX/TeX markup or commands (no \\frac, \\sec, \\tan, $$, \\[, \\], or \\( \\\)). " +
-  "Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹), and function names like sec(x), tan(x). " +
-  "When writing powers, use Unicode superscripts (e.g., x², x³) instead of caret notation. For fractions, use a slash (e.g., (a+b)/2) if needed. Keep the output readable as normal text.\n" +
+  "Response format policy: Use readable Markdown for structure (bold with **like this**). " +
+  "For math, you MAY use LaTeX, but you MUST wrap it as inline math using $...$ or display math using $$...$$ so the client can render it. " +
+  "Never output raw LaTeX commands like \\int, \\mathbf, \\partial, \\nabla, etc. unless they are INSIDE $...$ or $$...$$. " +
+  "Do not output partial-math like (a+b)^2 with only part delimited; the ENTIRE expression must be within a single pair of math delimiters. " +
+  "If you write LaTeX, keep it minimal and standard (e.g., \\frac{a}{b}, \\sqrt{x}).\n" +
   "Keep within ~120 words unless the prompt explicitly asks for detailed explanation.\n" +
   "You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.\n" +
   "Return ONLY valid JSON with keys: \n" +
@@ -32,6 +37,18 @@ async function loadModeDetectionRules(): Promise<string> {
   }
 }
 
+ function debugLog(label: string, data: unknown) {
+   if (!DEBUG_SOLVE) return;
+   try {
+     const s = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+     console.log(`[solve][debug] ${label}:`, (s || "").slice(0, 6000));
+   } catch {
+     try {
+       console.log(`[solve][debug] ${label}:`, data);
+     } catch {}
+   }
+ }
+
 /**
  * Helper function to create a JSON response with a specific status code
  * @param status - HTTP status code
@@ -47,24 +64,7 @@ function makeId() {
 }
 
 function sanitizeLatex(text: string) {
-  let s = (text || "").toString();
-  // Remove common TeX math delimiters
-  s = s.replace(/\$\$[\s\S]*?\$\$/g, (m) => m.replace(/\$\$/g, ""));
-  s = s.replace(/\$(?!\$)([\s\S]*?)(?<!\$)\$/g, "$1");
-  s = s.replace(/\\\(([\s\S]*?)\\\)/g, "$1");
-  s = s.replace(/\\\[([\s\S]*?)\\\]/g, "$1");
-
-  // Convert a few common commands to plain text / unicode
-  s = s.replace(/\\times\b/g, "×");
-  s = s.replace(/\\div\b/g, "÷");
-  s = s.replace(/\\cdot\b/g, "·");
-  s = s.replace(/\\sqrt\{([^}]*)\}/g, "√($1)");
-  s = s.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, "($1)/($2)");
-
-  // Remove remaining backslashes (TeX commands) and braces.
-  s = s.replace(/\\/g, "");
-  s = s.replace(/[{}]/g, "");
-  return s;
+  return (text || "").toString();
 }
 
 function parseModelJson(raw: string) {
@@ -136,13 +136,18 @@ export async function POST(req: NextRequest) {
               historyString +
               "\nNow answer this question: " +
               question +
-              "\nImportant: write your response as natural text with inline math, not LaTeX/TeX. No backslashes or TeX commands. " +
-              "Return ONLY JSON with the keys described above.",
+              "\nFormatting requirements:\n" +
+              "- Use Markdown for structure (you may use **bold**).\n" +
+              "- ALL math must be wrapped as $...$ (inline) or $$...$$ (display).\n" +
+              "- For display math, put the $$ delimiters on their own lines.\n" +
+              "- Do NOT present equations inside ((double parentheses)) or [square brackets]; use $$...$$ instead.\n" +
+              "Return ONLY JSON with the keys described above."
           },
         ],
       });
 
       const raw = rsp.choices?.[0]?.message?.content?.trim() || "{}";
+      debugLog("raw_model_content_text_only", raw);
       const parsed: any = parseModelJson(raw);
       if (!parsed) {
         if (!raw) return json(502, { error: "Model returned no content." });
@@ -155,6 +160,7 @@ export async function POST(req: NextRequest) {
       }
 
       const messageRaw = (parsed?.message ?? "").toString().trim();
+      debugLog("parsed_message_text_only", messageRaw);
       const message = sanitizeLatex(messageRaw);
       const questionText = (parsed?.question_text ?? "").toString().trim();
       const answerPlain = (parsed?.answer_plain ?? "").toString().trim();
@@ -214,8 +220,12 @@ export async function POST(req: NextRequest) {
                     question +
                     "\nUse the image only if it contains relevant information. If the image is unclear, unrelated, or unreadable, ignore it and still answer the voice question. You MUST still answer the voice question. "
                   : "\nNow read the math in this image and respond using the rules above. ") +
-                "Important: write your response as natural text with inline math, not LaTeX/TeX. No backslashes or TeX commands. " +
-                "Return ONLY JSON with the keys described above.",
+                "\nFormatting requirements:\n" +
+                "- Use Markdown for structure (you may use **bold**).\n" +
+                "- ALL math must be wrapped as $...$ (inline) or $$...$$ (display).\n" +
+                "- For display math, put the $$ delimiters on their own lines.\n" +
+                "- Do NOT present equations inside ((double parentheses)) or [square brackets]; use $$...$$ instead.\n" +
+                "Return ONLY JSON with the keys described above."
             },
             { type: "image_url", image_url: { url: dataUrl } } as any,
           ],
@@ -240,6 +250,7 @@ export async function POST(req: NextRequest) {
 
     // Extract and clean the main message
     const messageRaw = (parsed?.message ?? "").toString().trim();
+    debugLog("parsed_message_image", messageRaw);
     const message = sanitizeLatex(messageRaw);
     const questionText = (parsed?.question_text ?? "").toString().trim();
     // We no longer use AI to name boards

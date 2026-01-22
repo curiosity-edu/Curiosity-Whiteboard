@@ -49,7 +49,7 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
   "imageUrl": "...",
   "addToCanvas": false,
   "createdAt": "serverTimestamp()",
-  "updatedAt": "serverTimestamp()"
+  "updatedAt": "serverTimestamp()",
 }
 ```
 
@@ -65,12 +65,12 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
     {
       "question": "…transcribed text…",
       "response": "…AI response text…",
-      "ts": 1731520123456
-    }
+      "ts": 1731520123456,
+    },
   ],
   "doc": {
     /* TLDraw snapshot */
-  }
+  },
 }
 ```
 
@@ -90,9 +90,10 @@ The system prompt is composed of two parts:
 - The existing format policy and JSON output instructions (unchanged), shown below for reference:
 
 ```
-Response format policy: DO NOT use LaTeX/TeX markup or commands (no \frac, \sec, \tan, $$, \[, \], or \( \)).
-Use natural language with inline math using plain text or Unicode symbols where helpful (e.g., ×, ÷, √, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹), and function names like sec(x), tan(x).
-When writing powers, use Unicode superscripts (e.g., x², x³) instead of caret notation. For fractions, use a slash (e.g., (a+b)/2) if needed. Keep the output readable as normal text.
+Response format policy: You MAY use Markdown + LaTeX, but ALL math must be wrapped in proper math delimiters:
+- Inline math: $...$
+- Display math: $$...$$ (with the opening $$ and closing $$ on their own lines)
+Never emit raw TeX/LaTeX commands (backslashes like \frac, \nabla, \oint, \mathbf, etc.) outside of $...$ or $$...$$.
 Keep within ~120 words unless the image explicitly asks for detailed explanation.
 You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.
 Return ONLY valid JSON with keys:
@@ -107,20 +108,19 @@ Return ONLY valid JSON with keys:
 ```
 Here is the prior history as JSON. Use it as context: [historyString]
 Now read the math in this image and respond using the rules above.
-Important: write your response as natural text with inline math, not LaTeX/TeX. No backslashes or TeX commands.
+Important: all math must be wrapped in $...$ or $$...$$. Do not emit TeX commands outside math delimiters.
 Return ONLY JSON with the keys described above.
 [Image: dataUrl]
+
+```
 
 ### User Prompt (voice-only flow)
 
 ```
-
 Here is the prior history as JSON. Use it as context: [historyString]
 Now answer this question: [spoken text]
-Important: write your response as natural text with inline math, not LaTeX/TeX. No backslashes or TeX commands.
+Important: all math must be wrapped in $...$ or $$...$$. Do not emit TeX commands outside math delimiters.
 Return ONLY JSON with the keys described above.
-
-```
 
 ```
 
@@ -160,6 +160,31 @@ Return ONLY JSON with the keys described above.
 - `POST /api/solve` is called; loading state is shown.
 - The floating response stack is scrollable (max height) and auto-scrolls to the top whenever a new response arrives (newest-first ordering).
 
+### 2c. Math Rendering (Markdown + KaTeX)
+
+AI responses support Markdown with math rendered via KaTeX. The pipeline is designed to avoid raw dollar signs and raw TeX commands leaking into the UI.
+
+- Server-side guarantees (in `src/app/api/solve/route.ts`):
+  - The model is instructed to output Markdown and wrap ALL math in `$...$` (inline) or `$$...$$` (display).
+  - Display math must be formatted with `$$` delimiters on their own lines.
+  - The model must not output any TeX commands (backslashes) outside of math delimiters.
+- Client-side normalization (in `src/components/Board.tsx`):
+  - `preprocessMath()` runs before rendering.
+  - Converts `\( ... \)` to `$...$` and `\[ ... \]` to display `$$...$$`.
+  - Repairs malformed dollar delimiters and normalizes display math to the canonical form:
+    - `\n\n$$\n...\n$$\n\n`
+  - Wraps “naked” LaTeX command runs that leak into prose (e.g., `\int`, `\oint`, `\nabla`, `\mathbf`) into display math blocks when safe.
+  - Avoids rewriting inside existing math/code spans to prevent corruption.
+- Rendering:
+  - Responses render via `react-markdown` + `remark-math` + `rehype-katex`.
+  - KaTeX CSS is loaded globally in `src/app/layout.tsx`.
+  - Display math is styled as a readable “math box” via `src/app/globals.css`.
+
+Debugging math rendering:
+
+- Client: set `localStorage` key `curiosity:debugMath=1` to log raw message, `preprocessMath()` output, and the rendered markdown source.
+- Server: set env var `CURIOSITY_DEBUG_SOLVE=1` to log raw model output and parsed JSON.
+
 ### 2b. Voice Input Flow (client in `src/components/Board.tsx`)
 
 - **Start**: The top-right overlay has a **Voice** button (`🎤 Voice`) to start recording.
@@ -177,7 +202,7 @@ Return ONLY JSON with the keys described above.
 - Accepts `image` (PNG) and/or `question` (text from voice). At least one must be present.
 - Receives optional prior history from the client (as JSON string) for context.
 - Voice-first behavior: when both image and voice are present, the voice question is treated as primary; if the vision output is empty/unhelpful, the server falls back to a text-only solve to ensure the spoken question is answered.
-- Output sanitization: the server strips LaTeX/TeX from model responses to enforce the Response Format Policy before returning the final `message`.
+- Output shaping: the server enforces JSON-only output and prompting rules that keep math in `$...$` / `$$...$$`.
 - For image requests: sends the image + history to the model.
 - For voice-only requests: sends the text question + history to the model (no image).
 - Returns JSON `{ message, questionText, boardId, modeCategory, ... }`.
@@ -212,19 +237,19 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 - Snapshot autosave uses `updateDoc(ref, { doc: snapshot, updatedAt })`.
 - This replaces the entire `doc` field (no deep merge), ensuring deleted shapes are actually removed from Firestore. Using `setDoc(..., { merge: true })` can leave nested keys behind and is avoided for updates. A `setDoc` fallback is used only to create a new board document if it does not yet exist.
 
-### 8. UI Notes (Overlays and TLDraw UI)
-
-- The old right AI panel has been removed in favor of **overlay controls**.
-- The **top-right** overlay contains Ask Curiosity, Voice, Cancel (while recording), and Clear; responses appear as a vertical stack beneath (newest at top).
-- **Chat History** is accessible from each board tile’s 3-dot menu and opens a **right-side collapsible sidebar**.
-- The TLDraw **top style panel** is hidden by default to keep the canvas clean (only the bottom toolbar remains visible).
-
 ### 7. Error Handling
 
 - Network errors: Shows user-friendly error message in the AI panel
 - API errors: Displays the error message from the server
 - Invalid responses: Falls back to plain text display if JSON parsing fails
 - Rate limiting: Implements exponential backoff for retries
+
+### 8. UI Notes (Overlays and TLDraw UI)
+
+- The old right AI panel has been removed in favor of **overlay controls**.
+- The **top-right** overlay contains Ask Curiosity, Voice, Cancel (while recording), and Clear; responses appear as a vertical stack beneath (newest at top).
+- **Chat History** is accessible from each board tile’s 3-dot menu and opens a **right-side collapsible sidebar**.
+- The TLDraw **top style panel** is hidden by default to keep the canvas clean (only the bottom toolbar remains visible).
 
 ## Styling & UX Notes
 
