@@ -265,10 +265,79 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 - **AI Overlay**: Top-right overlay hosts Ask Curiosity + Voice (or Cancel while recording) + Clear. Responses render as a stacked, scrollable bubble list (newest first) that auto-scrolls to the top on new messages; new bubbles animate in and show the detected mode when available. Chat History opens from the board tile menu as a right-side collapsible sidebar. The "Add to Canvas" preference is stored in `localStorage`.
 - **About page**: Scrollable within the fixed layout by using a viewport-height container (`h-screen`) with `overflow-y: auto`; content is a centered readable column.
 
-## Generative Manim (WIP)
+## Generative Manim
 
-- Route: `GET /manim`
-- UI: Header + prompt input + no-op Generate button (placeholder for future work).
+The app includes a Generative Manim workflow that turns a user prompt into a narrated Manim animation and renders the resulting MP4 directly on the `/manim` page.
+
+High-level behavior:
+
+- User enters a prompt on `GET /manim` and clicks **Generate Manim**.
+- The UI immediately shows a generating state and begins polling for progress.
+- The server runs a multi-stage pipeline (LLM → TTS → Manim render → stitch) and writes outputs under a per-job folder.
+- Once finished, the UI streams the final MP4 back from the server and plays it on the same page.
+
+### Important: Vercel constraints
+
+Manim rendering requires native dependencies (`python3`, `manim`, `ffmpeg`, `ffprobe`) and is not compatible with Vercel serverless functions.
+
+To support deployment, the Manim pipeline is implemented behind a runner abstraction:
+
+- **Local runner**: used for local development (`next dev`) and for non‑Vercel environments.
+- **Remote runner**: used on Vercel and requires a separate worker service.
+
+### Local development prerequisites
+
+To run the pipeline locally, you need these installed and available on `PATH`:
+
+- `python3`
+- `manim` (Manim Community Edition)
+- `ffmpeg` and `ffprobe`
+
+Required environment variables:
+
+- `OPENAI_API_KEY`
+
+Optional environment variables:
+
+- `MANIM_RUNNER=local|remote`
+- `MANIM_WORKER_URL` (only required for `remote` mode)
+
+### Outputs and local storage
+
+Each generation is written into a local job folder:
+
+- `.manim_jobs/<jobId>/...`
+
+This folder is intentionally ignored by git.
+
+### Pipeline stages (local runner)
+
+The local runner performs the following steps:
+
+1. Generate a narration/visual script that alternates `<nar>` and `<viz>` blocks.
+2. Parse `<nar>` blocks and generate TTS audio for each segment.
+3. Generate Manim Python code for each `<viz>` segment.
+4. Render each scene with the Manim CLI.
+5. Read audio durations and patch animation run times so visuals match narration.
+6. Stitch clips (and audio) into a final MP4.
+
+### API endpoints
+
+The `/manim` page uses these endpoints:
+
+- `POST /api/manim/start`
+  - Body: `{ prompt, clientId }`
+  - Returns: `{ jobId, status, reused }`
+- `GET /api/manim/status?jobId=...`
+  - Returns: job metadata + `step` + `logs` + `hasVideo`
+- `GET /api/manim/video?jobId=...`
+  - Streams the final MP4 for playback on the page
+
+Notes:
+
+- Jobs are tracked in-memory (per server process) for local development.
+- The server enforces one active job at a time per `clientId`.
+- In remote mode, `status` and `video` are proxied/redirected to the worker.
 
 ## Source Files Overview
 
@@ -282,7 +351,13 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 - `src/app/board/[id]/page.tsx` — Server page that renders `<Board boardId={id} />`.
 - `src/components/Board.tsx` — Client TLDraw board + AI Panel. Calls `/api/solve`, shows responses, and persists board state/history to Firestore when signed in.
 - `src/app/api/solve/route.ts` — Accepts `image` (+ optional `history`) and calls OpenAI. Stateless (no server-side persistence).
-- `src/app/manim/page.tsx` — Placeholder Generative Manim page (prompt input + Generate telling button).
+- `src/app/manim/page.tsx` — Generative Manim UI: prompt input, generation state, status polling, logs, and MP4 playback.
+- `src/app/api/manim/start/route.ts` — Starts a Manim generation job (local runner in dev, remote worker on Vercel).
+- `src/app/api/manim/status/route.ts` — Returns job progress (or proxies to worker in remote mode).
+- `src/app/api/manim/video/route.ts` — Streams the generated MP4 (or redirects to worker in remote mode).
+- `src/lib/manim/jobs.ts` — In-memory Manim job store (status, step, logs, output paths).
+- `src/lib/manim/runner.ts` — Runner abstraction (local vs remote) and environment-based mode selection.
+- `src/lib/manim/startLocalJob.ts` — Local pipeline runner (OpenAI + Manim CLI + ffmpeg).
 - `src/app/api/boards/*` — Legacy JSON-based board endpoints (no longer used for signed-in persistence).
 - `src/app/api/history/route.ts` — Legacy sessions endpoint.
 - `src/app/globals.css` — Tailwind setup and theme tokens. Forces light background to avoid dark strips; sets body text color.

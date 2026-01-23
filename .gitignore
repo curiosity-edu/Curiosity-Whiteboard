@@ -41,3 +41,9 @@ yarn-error.log*
 next-env.d.ts
 
 # data
+
+# reference
+gen-manim-reference
+
+# local manim pipeline outputs
+.manim_jobs/
