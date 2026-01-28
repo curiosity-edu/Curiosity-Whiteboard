@@ -22,6 +22,7 @@ import { IoIosCreate } from "react-icons/io";
 import { MdAnimation } from "react-icons/md";
 
 const DEFAULT_BOARD_TITLE = "Untitled Board";
+const SHOW_ADD_TO_CANVAS_OPTION = false;
 
 function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -62,10 +63,36 @@ export default function MyBoardsSidebar({
   const [renamingId, setRenamingId] = React.useState<string | null>(null);
   const [tempTitle, setTempTitle] = React.useState<string>("");
   const [profileOpen, setProfileOpen] = React.useState(false);
+  const profileBtnRef = React.useRef<HTMLButtonElement | null>(null);
+  const [profileMenuPos, setProfileMenuPos] = React.useState<{
+    left: number;
+    top: number;
+  } | null>(null);
+
+  const newBoardPendingRenameKey = React.useMemo(() => {
+    const uid = user?.uid ? String(user.uid) : "anon";
+    return `curiosity:pendingRenameBoardId:${uid}`;
+  }, [user?.uid]);
 
   React.useEffect(() => {
     boardsRef.current = boards;
   }, [boards]);
+
+  // If a board was created and we navigated, re-enter rename mode after the board list updates.
+  React.useEffect(() => {
+    if (!user) return;
+    if (renamingId) return;
+    try {
+      const pendingId = localStorage.getItem(newBoardPendingRenameKey);
+      if (!pendingId) return;
+      const exists = (boards || []).some((b) => b && b.id === pendingId);
+      if (!exists) return;
+      setRenamingId(pendingId);
+      const b = (boards || []).find((x) => x && x.id === pendingId);
+      setTempTitle((b?.title as string) || DEFAULT_BOARD_TITLE);
+      localStorage.removeItem(newBoardPendingRenameKey);
+    } catch {}
+  }, [user, boards, renamingId, newBoardPendingRenameKey]);
 
   React.useEffect(() => {
     if (!user) {
@@ -78,7 +105,7 @@ export default function MyBoardsSidebar({
     setLoading(true);
     const q = query(
       collection(database, "users", user.uid, "boards"),
-      orderBy("updatedAt", "desc")
+      orderBy("updatedAt", "desc"),
     );
 
     const unsub = onSnapshot(
@@ -128,7 +155,7 @@ export default function MyBoardsSidebar({
       (err) => {
         console.error("[Boards] snapshot failed", err);
         setLoading(false);
-      }
+      },
     );
 
     return () => {
@@ -142,13 +169,11 @@ export default function MyBoardsSidebar({
   React.useEffect(() => {
     function onDocClick() {
       setMenuOpenId(null);
-      setRenamingId(null);
       setProfileOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setMenuOpenId(null);
-        setRenamingId(null);
         setProfileOpen(false);
       }
     }
@@ -168,7 +193,6 @@ export default function MyBoardsSidebar({
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setMenuOpenId(null);
-        setRenamingId(null);
       }
     }
     window.addEventListener("click", onDocClick);
@@ -183,7 +207,7 @@ export default function MyBoardsSidebar({
     try {
       if (
         !window.confirm(
-          "Are you sure you want to delete this board? This action cannot be undone."
+          "Are you sure you want to delete this board? This action cannot be undone.",
         )
       ) {
         return;
@@ -239,6 +263,41 @@ export default function MyBoardsSidebar({
     setMenuOpenId(null);
   }
 
+  async function createBoardAndStartRename() {
+    if (!user) return;
+    const id = makeId();
+    const now = Date.now();
+    const optimistic = {
+      id,
+      title: DEFAULT_BOARD_TITLE,
+      createdAt: now,
+      updatedAt: now,
+      count: 0,
+    };
+    try {
+      setBoards((prev) => [
+        optimistic,
+        ...(prev || []).filter((b) => b.id !== id),
+      ]);
+      try {
+        localStorage.setItem(newBoardPendingRenameKey, id);
+      } catch {}
+      await setDoc(doc(database, "users", user.uid, "boards", id), {
+        id,
+        title: DEFAULT_BOARD_TITLE,
+        createdAt: now,
+        updatedAt: now,
+        items: [],
+        doc: null,
+      });
+      router.push(`/board/${id}`);
+    } catch (e) {
+      console.error("[Boards] create failed", e);
+      alert("Failed to create board. Please try again.");
+      setRenamingId(null);
+    }
+  }
+
   async function commitRename(id: string) {
     const t = (tempTitle || "").trim();
     setRenamingId(null);
@@ -246,7 +305,7 @@ export default function MyBoardsSidebar({
     try {
       // Optimistic update
       setBoards((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, title: t } : x))
+        prev.map((x) => (x.id === id ? { ...x, title: t } : x)),
       );
       if (user) {
         await updateDoc(doc(database, "users", user.uid, "boards", id), {
@@ -298,14 +357,19 @@ export default function MyBoardsSidebar({
             <FcAbout className="h-5 w-5" />
           </Link>
           {user ? (
-            <Link
-              href="/boards/new"
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void createBoardAndStartRename();
+              }}
               className="p-2 rounded-md hover:bg-neutral-50"
               aria-label="New Board"
               title="New Board"
+              type="button"
             >
               <IoIosCreate className="h-5 w-5" />
-            </Link>
+            </button>
           ) : (
             <button
               onClick={async () => {
@@ -326,8 +390,19 @@ export default function MyBoardsSidebar({
           {user ? (
             <div className="relative">
               <button
+                ref={profileBtnRef}
                 onClick={(e) => {
                   e.stopPropagation();
+                  const btn = profileBtnRef.current;
+                  if (btn) {
+                    const r = btn.getBoundingClientRect();
+                    setProfileMenuPos({ left: r.right + 8, top: r.top });
+                  } else {
+                    setProfileMenuPos({
+                      left: 64,
+                      top: window.innerHeight - 160,
+                    });
+                  }
                   setProfileOpen((v) => !v);
                 }}
                 className="p-1.5 rounded-full hover:bg-neutral-50"
@@ -343,37 +418,49 @@ export default function MyBoardsSidebar({
               {profileOpen && (
                 <div
                   role="menu"
-                  className="absolute bottom-12 left-1/2 -translate-x-1/2 z-50 rounded-md border border-neutral-200 bg-white shadow-md py-1"
+                  className="fixed z-50 rounded-md border border-neutral-200 bg-white shadow-md py-1 max-h-[70vh] overflow-y-auto min-w-[200px]"
+                  style={{
+                    left: Math.min(
+                      profileMenuPos?.left ?? 64,
+                      window.innerWidth - 220,
+                    ),
+                    top: Math.min(
+                      profileMenuPos?.top ?? 64,
+                      window.innerHeight - 240,
+                    ),
+                  }}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <label className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="accent-blue-600"
-                      defaultChecked={(() => {
-                        try {
-                          const v = localStorage.getItem("addToCanvas");
-                          return v ? v === "true" : false;
-                        } catch {
-                          return false;
-                        }
-                      })()}
-                      onChange={(e) => {
-                        try {
-                          localStorage.setItem(
-                            "addToCanvas",
-                            String(e.target.checked)
-                          );
-                        } catch {}
-                        try {
-                          window.dispatchEvent(
-                            new Event("curiosity:addToCanvasChanged")
-                          );
-                        } catch {}
-                      }}
-                    />
-                    <span>Always add to Canvas</span>
-                  </label>
+                  {SHOW_ADD_TO_CANVAS_OPTION && (
+                    <label className="flex items-center gap-2 w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="accent-blue-600"
+                        defaultChecked={(() => {
+                          try {
+                            const v = localStorage.getItem("addToCanvas");
+                            return v ? v === "true" : false;
+                          } catch {
+                            return false;
+                          }
+                        })()}
+                        onChange={(e) => {
+                          try {
+                            localStorage.setItem(
+                              "addToCanvas",
+                              String(e.target.checked),
+                            );
+                          } catch {}
+                          try {
+                            window.dispatchEvent(
+                              new Event("curiosity:addToCanvasChanged"),
+                            );
+                          } catch {}
+                        }}
+                      />
+                      <span>Always add to Canvas</span>
+                    </label>
+                  )}
                   <button
                     className="w-full px-3 py-1.5 text-left text-sm text-neutral-800 hover:bg-neutral-50"
                     onClick={async () => {
@@ -467,13 +554,18 @@ export default function MyBoardsSidebar({
         </div>
         <div className="flex items-center gap-2">
           {user && (
-            <Link
-              href="/boards/new"
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void createBoardAndStartRename();
+              }}
               className="inline-flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-white bg-neutral-900 rounded-md hover:bg-neutral-800"
             >
               <IoIosCreate className="h-4 w-4" />
               <span>New Board</span>
-            </Link>
+            </button>
           )}
         </div>
       </div>
@@ -556,7 +648,7 @@ export default function MyBoardsSidebar({
                         try {
                           localStorage.setItem(
                             "curiosity:openHistoryBoardId",
-                            String(b.id)
+                            String(b.id),
                           );
                         } catch {}
                         setMenuOpenId(null);
@@ -641,12 +733,12 @@ export default function MyBoardsSidebar({
                       try {
                         localStorage.setItem(
                           "addToCanvas",
-                          String(e.target.checked)
+                          String(e.target.checked),
                         );
                       } catch {}
                       try {
                         window.dispatchEvent(
-                          new Event("curiosity:addToCanvasChanged")
+                          new Event("curiosity:addToCanvasChanged"),
                         );
                       } catch {}
                     }}

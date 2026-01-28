@@ -144,6 +144,7 @@ Return ONLY JSON with the keys described above.
 
 - Renders `Board` with a required `boardId` prop.
 - Left sidebar (signed-in users): `MyBoardsSidebar` lists boards from Firestore (`users/{uid}/boards`), supports rename/delete, and navigation. Each board tile has a 3-dot menu (always visible, touch-friendly) that includes **Chat History**.
+- Creating a board: clicking **New Board** creates a new Firestore board immediately, navigates to it, and enters inline rename mode so the title can be set quickly.
 - Center: TLDraw canvas fills available height; TLDraw bottom toolbar is visible (top style panel is hidden by default).
 - Top-right overlay: **Ask Curiosity** and **Voice/Cancel** controls (fixed position, do not move while panning). A floating stack of response bubbles appears under the Ask button (newest on top). Each bubble has `+` to add to canvas and `×` to dismiss; a global **Clear** button clears all. New bubbles animate in subtly and show the detected mode next to the timestamp when available.
 - Signed-in board persistence:
@@ -159,6 +160,7 @@ Return ONLY JSON with the keys described above.
 - Includes `history` (stringified Q/A items) so the model has context.
 - `POST /api/solve` is called; loading state is shown.
 - The floating response stack is scrollable (max height) and auto-scrolls to the top whenever a new response arrives (newest-first ordering).
+- The response stack is persisted locally per-board in `localStorage` so it survives refreshes and switching between boards (no Firestore persistence).
 
 ### 2c. Math Rendering (Markdown + KaTeX)
 
@@ -219,7 +221,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 ### 5. Client Update (Board)
 
 - Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles. The stack auto-scrolls back to the top on each new response while still allowing manual scroll to older messages. New bubbles animate in and display the detected mode next to the timestamp when available.
-- If "Add to Canvas" is enabled, adds a TLDraw text shape below the selection with `toRichText(message)`.
+- The response bubble list is persisted locally per-board in `localStorage`.
 - History overlay can be opened to view the entire board conversation; reads `GET /api/boards/[id]`.
 
 ### 6. Persistence
@@ -262,7 +264,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
   - "New Board" uses `IoIosCreate`.
   - Hover over a board to reveal delete; confirmation precedes `DELETE /api/boards/[id]`.
 - **Canvas/Layout**: TLDraw canvas fills available space via `absolute inset-0` within a `min-h-0` flex container.
-- **AI Overlay**: Top-right overlay hosts Ask Curiosity + Voice (or Cancel while recording) + Clear. Responses render as a stacked, scrollable bubble list (newest first) that auto-scrolls to the top on new messages; new bubbles animate in and show the detected mode when available. Chat History opens from the board tile menu as a right-side collapsible sidebar. The "Add to Canvas" preference is stored in `localStorage`.
+- **AI Overlay**: Top-right overlay hosts Ask Curiosity + Voice (or Cancel while recording) + Clear. Responses render as a stacked, scrollable bubble list (newest first) that auto-scrolls to the top on new messages; new bubbles animate in and show the detected mode when available. Chat History opens from the board tile menu as a right-side collapsible sidebar. The response stack is persisted locally per-board via `localStorage`.
 - **About page**: Scrollable within the fixed layout by using a viewport-height container (`h-screen`) with `overflow-y: auto`; content is a centered readable column.
 
 ## Generative Manim

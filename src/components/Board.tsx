@@ -70,6 +70,46 @@ export default function Board({ boardId }: { boardId: string }) {
   const ctx = (UserAuth() as any) || [];
   const user = ctx[0];
 
+  const aiItemsStorageKey = React.useMemo(() => {
+    const uid = user?.uid ? String(user.uid) : "anon";
+    const bid = boardId || "default";
+    return `curiosity:aiItems:${uid}:${bid}`;
+  }, [user?.uid, boardId]);
+
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(aiItemsStorageKey);
+      if (!raw) {
+        setAiItems([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setAiItems([]);
+        return;
+      }
+      const cleaned = parsed
+        .filter((x: any) => x && typeof x === "object")
+        .map((x: any) => ({
+          id: String(x.id || ""),
+          text: String(x.text || ""),
+          ts: Number(x.ts || 0),
+          question: x.question ? String(x.question) : undefined,
+          modeCategory: x.modeCategory ? String(x.modeCategory) : undefined,
+        }))
+        .filter((x: any) => x.id && x.text);
+      setAiItems(cleaned);
+    } catch {
+      setAiItems([]);
+    }
+  }, [aiItemsStorageKey]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(aiItemsStorageKey, JSON.stringify(aiItems));
+    } catch {}
+  }, [aiItemsStorageKey, aiItems]);
+
   // Prevent signed-in users from staying on a local/unknown board route.
   // If the boardId doesn't exist in Firestore, redirect to '/' so it can route
   // to the most recently updated board or auto-create a default one.
