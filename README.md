@@ -144,7 +144,7 @@ Return ONLY JSON with the keys described above.
 
 - Renders `Board` with a required `boardId` prop.
 - Left sidebar (signed-in users): `MyBoardsSidebar` lists boards from Firestore (`users/{uid}/boards`), supports rename/delete, and navigation. Each board tile has a 3-dot menu (always visible, touch-friendly) that includes **Chat History**.
-- Creating a board: clicking **New Board** creates a new Firestore board immediately, navigates to it, and enters inline rename mode so the title can be set quickly.
+- Creating a board: clicking **New Board** creates a new Firestore board immediately, navigates to it, and enters inline rename mode so the title can be set quickly. Rename mode stays active until the user explicitly commits (Enter or a later outside click) or cancels (Escape), and the initial navigation click is ignored so the input doesn’t instantly close.
 - Center: TLDraw canvas fills available height; TLDraw bottom toolbar is visible (top style panel is hidden by default).
 - Top-right overlay: **Ask Curiosity** and **Voice/Cancel** controls (fixed position, do not move while panning). A floating stack of response bubbles appears under the Ask button (newest on top). Each bubble has `+` to add to canvas and `×` to dismiss; a global **Clear** button clears all. New bubbles animate in subtly and show the detected mode next to the timestamp when available.
 - Signed-in board persistence:

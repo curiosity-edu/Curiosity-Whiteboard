@@ -69,14 +69,40 @@ export default function MyBoardsSidebar({
     top: number;
   } | null>(null);
 
+  const renameInputRef = React.useRef<HTMLInputElement | null>(null);
+  const renameGraceUntilRef = React.useRef<number>(0);
+
   const newBoardPendingRenameKey = React.useMemo(() => {
     const uid = user?.uid ? String(user.uid) : "anon";
     return `curiosity:pendingRenameBoardId:${uid}`;
   }, [user?.uid]);
 
+  const renameModeBoardIdKey = React.useMemo(() => {
+    const uid = user?.uid ? String(user.uid) : "anon";
+    return `curiosity:renameModeBoardId:${uid}`;
+  }, [user?.uid]);
+
+  const renameModeBoardIdGlobalKey = "curiosity:renameModeBoardId";
+
   React.useEffect(() => {
     boardsRef.current = boards;
   }, [boards]);
+
+  React.useEffect(() => {
+    try {
+      if (!user) {
+        localStorage.removeItem(renameModeBoardIdKey);
+        localStorage.removeItem(renameModeBoardIdGlobalKey);
+      } else if (renamingId) {
+        localStorage.setItem(renameModeBoardIdKey, String(renamingId));
+        localStorage.setItem(renameModeBoardIdGlobalKey, String(renamingId));
+      } else {
+        localStorage.removeItem(renameModeBoardIdKey);
+        localStorage.removeItem(renameModeBoardIdGlobalKey);
+      }
+      window.dispatchEvent(new Event("curiosity:renameModeChanged"));
+    } catch {}
+  }, [user, renamingId, renameModeBoardIdKey]);
 
   // If a board was created and we navigated, re-enter rename mode after the board list updates.
   React.useEffect(() => {
@@ -185,6 +211,25 @@ export default function MyBoardsSidebar({
     };
   }, []);
 
+  // While renaming, commit when clicking anywhere outside the input.
+  // This avoids relying on onBlur, which can fire immediately due to focus stealing.
+  React.useEffect(() => {
+    if (!renamingId) return;
+    const id: string = renamingId;
+    renameGraceUntilRef.current = Date.now() + 350;
+    function onPointerDown(e: PointerEvent) {
+      if (Date.now() < renameGraceUntilRef.current) return;
+      const el = renameInputRef.current;
+      const target = e.target as Node | null;
+      if (!el || !target) return;
+      if (el.contains(target)) return;
+      void commitRename(id);
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () =>
+      document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [renamingId]);
+
   // Close menus on outside click or Escape
   React.useEffect(() => {
     function onDocClick() {
@@ -258,6 +303,11 @@ export default function MyBoardsSidebar({
   }
 
   function startRename(b: any) {
+    try {
+      localStorage.setItem(renameModeBoardIdKey, String(b.id));
+      localStorage.setItem(renameModeBoardIdGlobalKey, String(b.id));
+      window.dispatchEvent(new Event("curiosity:renameModeChanged"));
+    } catch {}
     setRenamingId(b.id);
     setTempTitle(b.title || DEFAULT_BOARD_TITLE);
     setMenuOpenId(null);
@@ -279,8 +329,13 @@ export default function MyBoardsSidebar({
         optimistic,
         ...(prev || []).filter((b) => b.id !== id),
       ]);
+      setRenamingId(id);
+      setTempTitle(DEFAULT_BOARD_TITLE);
       try {
         localStorage.setItem(newBoardPendingRenameKey, id);
+        localStorage.setItem(renameModeBoardIdKey, id);
+        localStorage.setItem(renameModeBoardIdGlobalKey, id);
+        window.dispatchEvent(new Event("curiosity:renameModeChanged"));
       } catch {}
       await setDoc(doc(database, "users", user.uid, "boards", id), {
         id,
@@ -597,6 +652,7 @@ export default function MyBoardsSidebar({
                   {renamingId === b.id ? (
                     <input
                       autoFocus
+                      ref={renameInputRef}
                       value={tempTitle}
                       onChange={(e) => setTempTitle(e.target.value)}
                       onKeyDown={(e) => {
@@ -608,7 +664,6 @@ export default function MyBoardsSidebar({
                           setRenamingId(null);
                         }
                       }}
-                      onBlur={() => commitRename(b.id)}
                       className="w-full rounded-sm border border-blue-300 bg-blue-50 px-1 py-0.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-blue-400"
                     />
                   ) : (

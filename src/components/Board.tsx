@@ -70,6 +70,33 @@ export default function Board({ boardId }: { boardId: string }) {
   const ctx = (UserAuth() as any) || [];
   const user = ctx[0];
 
+  const renameModeBoardIdGlobalKey = "curiosity:renameModeBoardId";
+
+  const [suppressCanvasAutoFocus, setSuppressCanvasAutoFocus] =
+    React.useState<boolean>(() => {
+      try {
+        const v = localStorage.getItem(renameModeBoardIdGlobalKey) || "";
+        return Boolean(v) && v === String(boardId || "");
+      } catch {
+        return false;
+      }
+    });
+
+  React.useEffect(() => {
+    function compute() {
+      try {
+        const v = localStorage.getItem(renameModeBoardIdGlobalKey) || "";
+        setSuppressCanvasAutoFocus(Boolean(v) && v === String(boardId || ""));
+      } catch {
+        setSuppressCanvasAutoFocus(false);
+      }
+    }
+    compute();
+    window.addEventListener("curiosity:renameModeChanged", compute);
+    return () =>
+      window.removeEventListener("curiosity:renameModeChanged", compute);
+  }, [renameModeBoardIdGlobalKey, boardId]);
+
   const aiItemsStorageKey = React.useMemo(() => {
     const uid = user?.uid ? String(user.uid) : "anon";
     const bid = boardId || "default";
@@ -1221,7 +1248,7 @@ export default function Board({ boardId }: { boardId: string }) {
             persistenceKey={`board:${user ? user.uid : "anon"}:${
               boardId || "default"
             }`}
-            autoFocus
+            autoFocus={!suppressCanvasAutoFocus}
           />
         </div>
 
