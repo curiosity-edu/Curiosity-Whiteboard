@@ -8,7 +8,13 @@ import { doc, setDoc } from "firebase/firestore";
 
 export default function NewBoardPage() {
   const router = useRouter();
-  const ctx = (UserAuth() as any) || [];
+  type AuthUser = { uid: string };
+  const rawCtx = UserAuth();
+  const ctx = (Array.isArray(rawCtx) ? rawCtx : []) as unknown as [
+    AuthUser | null,
+    unknown?,
+    unknown?,
+  ];
   const user = ctx[0];
   const [title, setTitle] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
@@ -41,8 +47,9 @@ export default function NewBoardPage() {
         });
       }
       router.replace(`/board/${id}`);
-    } catch (e: any) {
-      setError(e?.message || "Something went wrong.");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Something went wrong.";
+      setError(msg);
     } finally {
       setSubmitting(false);
     }

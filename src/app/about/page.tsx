@@ -78,7 +78,7 @@ export default function AboutPage() {
               And then there’s the problem of scope. These resources are
               inherently limited. If a student wants to explore a niche
               topic—perhaps the geometric intuition behind eigenvectors or the
-              role of differential equations in neuroscience—they're at the
+              role of differential equations in neuroscience—they&apos;re at the
               mercy of whatever content/style of explanation happens to exist.
             </p>
             <p>

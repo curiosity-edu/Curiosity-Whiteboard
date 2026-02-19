@@ -9,7 +9,7 @@ const STORE_FILE = path.join(process.cwd(), "data", "solve_history.json");
 
 type HistoryItem = { question: string; response: string; ts: number };
 type Board = { id: string; title: string; createdAt: number; updatedAt: number; items: HistoryItem[] };
-type StoreShape = { boards: Board[] } | { sessions: any[] } | any;
+type StoreShape = { boards: Board[] } | { sessions: Board[] } | Record<string, unknown>;
 
 async function ensureDir() {
   await fs.mkdir(path.dirname(STORE_FILE), { recursive: true });
@@ -31,9 +31,12 @@ async function writeStore(data: StoreShape) {
 }
 
 function toBoards(shape: StoreShape): Board[] {
-  if (Array.isArray((shape as any).boards)) return (shape as any).boards as Board[];
+  const obj = shape && typeof shape === "object" ? (shape as Record<string, unknown>) : {};
+  const boards = obj.boards;
+  if (Array.isArray(boards)) return boards as Board[];
   // migrate legacy sessions -> boards
-  if (Array.isArray((shape as any).sessions)) return (shape as any).sessions as Board[];
+  const sessions = obj.sessions;
+  if (Array.isArray(sessions)) return sessions as Board[];
   return [];
 }
 

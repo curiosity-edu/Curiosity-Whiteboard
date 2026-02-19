@@ -11,6 +11,8 @@ import {
   orderBy,
   query,
   setDoc,
+  QuerySnapshot,
+  DocumentData,
 } from "firebase/firestore";
 
 const DEFAULT_BOARD_TITLE = "Untitled Board";
@@ -21,7 +23,13 @@ function makeId() {
 
 export default function Page() {
   const router = useRouter();
-  const ctx = (UserAuth() as any) || [];
+  type AuthUser = { uid: string };
+  const rawCtx = UserAuth();
+  const ctx = (Array.isArray(rawCtx) ? rawCtx : []) as unknown as [
+    AuthUser | null,
+    unknown?,
+    unknown?,
+  ];
   const user = ctx[0];
 
   React.useEffect(() => {
@@ -31,12 +39,12 @@ export default function Page() {
         if (user) {
           const q = query(
             collection(database, "users", user.uid, "boards"),
-            orderBy("updatedAt", "desc")
+            orderBy("updatedAt", "desc"),
           );
 
           // When signed in, do not fall back to anonymous/local boards.
           // Firestore reads can fail transiently during auth init; retry briefly.
-          let snap: any = null;
+          let snap: QuerySnapshot<DocumentData> | null = null;
           for (let i = 0; i < 3; i++) {
             try {
               snap = await getDocs(q);

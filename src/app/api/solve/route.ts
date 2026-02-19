@@ -85,7 +85,17 @@ function parseModelJson(raw: string) {
   return null;
 }
 
-function readModeCategory(parsed: any) {
+type SolveModelResponse = {
+  message?: unknown;
+  question_text?: unknown;
+  mode_category?: unknown;
+  modeCategory?: unknown;
+  answer_plain?: unknown;
+  answer_latex?: unknown;
+  explanation?: unknown;
+};
+
+function readModeCategory(parsed: SolveModelResponse | null) {
   const v =
     (parsed?.mode_category ?? parsed?.modeCategory ?? "").toString().trim();
   return v;
@@ -123,7 +133,7 @@ export async function POST(req: NextRequest) {
       const rsp = await client.chat.completions.create({
         model: MODEL,
         temperature: 0.2,
-        response_format: { type: "json_object" } as any,
+        response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
@@ -148,7 +158,9 @@ export async function POST(req: NextRequest) {
 
       const raw = rsp.choices?.[0]?.message?.content?.trim() || "{}";
       debugLog("raw_model_content_text_only", raw);
-      const parsed: any = parseModelJson(raw);
+      const parsed = parseModelJson(raw) as unknown;
+      const obj: SolveModelResponse | null =
+        parsed && typeof parsed === "object" ? (parsed as SolveModelResponse) : null;
       if (!parsed) {
         if (!raw) return json(502, { error: "Model returned no content." });
         return json(200, {
@@ -159,14 +171,14 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      const messageRaw = (parsed?.message ?? "").toString().trim();
+      const messageRaw = (obj?.message ?? "").toString().trim();
       debugLog("parsed_message_text_only", messageRaw);
       const message = sanitizeLatex(messageRaw);
-      const questionText = (parsed?.question_text ?? "").toString().trim();
-      const answerPlain = (parsed?.answer_plain ?? "").toString().trim();
-      const answerLatex = (parsed?.answer_latex ?? "").toString().trim();
-      const explanation = (parsed?.explanation ?? "").toString().trim();
-      const modeCategory = readModeCategory(parsed);
+      const questionText = (obj?.question_text ?? "").toString().trim();
+      const answerPlain = (obj?.answer_plain ?? "").toString().trim();
+      const answerLatex = (obj?.answer_latex ?? "").toString().trim();
+      const explanation = (obj?.explanation ?? "").toString().trim();
+      const modeCategory = readModeCategory(obj);
 
       return json(200, {
         message,
@@ -202,7 +214,7 @@ export async function POST(req: NextRequest) {
     const rsp = await client.chat.completions.create({
       model: MODEL,
       temperature: 0.2, // Lower temperature for more deterministic responses
-      response_format: { type: "json_object" } as any, // Force JSON response format
+      response_format: { type: "json_object" }, // Force JSON response format
       messages: [
         {
           role: "system",
@@ -218,16 +230,17 @@ export async function POST(req: NextRequest) {
                 (question
                   ? "\nNow answer this question (from voice): " +
                     question +
-                    "\nUse the image only if it contains relevant information. If the image is unclear, unrelated, or unreadable, ignore it and still answer the voice question. You MUST still answer the voice question. "
-                  : "\nNow read the math in this image and respond using the rules above. ") +
-                "\nFormatting requirements:\n" +
-                "- Use Markdown for structure (you may use **bold**).\n" +
-                "- ALL math must be wrapped as $...$ (inline) or $$...$$ (display).\n" +
-                "- For display math, put the $$ delimiters on their own lines.\n" +
-                "- Do NOT present equations inside ((double parentheses)) or [square brackets]; use $$...$$ instead.\n" +
-                "Return ONLY JSON with the keys described above."
+                    "\nFormatting requirements:\n" +
+                    "- Use Markdown for structure (you may use **bold**).\n" +
+                    "- ALL math must be wrapped as $...$ (inline) or $$...$$ (display).\n" +
+                    "- For display math, put the $$ delimiters on their own lines.\n" +
+                    "- Do NOT present equations inside ((double parentheses)) or [square brackets]; use $$...$$ instead.\n" +
+                    "Return ONLY JSON with the keys described above."
+                  : "\nNow read the math in this image and respond using the rules above.\n" +
+                    "Important: all math must be wrapped in $...$ or $$...$$. Do not emit TeX commands outside math delimiters.\n" +
+                    "Return ONLY JSON with the keys described above."),
             },
-            { type: "image_url", image_url: { url: dataUrl } } as any,
+            { type: "image_url", image_url: { url: dataUrl } },
           ],
         },
       ],
@@ -237,7 +250,9 @@ export async function POST(req: NextRequest) {
     const raw = rsp.choices?.[0]?.message?.content?.trim() || "{}";
 
     // Parse the JSON response from the AI
-    const parsed: any = parseModelJson(raw);
+    const parsed = parseModelJson(raw) as unknown;
+    const obj: SolveModelResponse | null =
+      parsed && typeof parsed === "object" ? (parsed as SolveModelResponse) : null;
     if (!parsed) {
       if (!raw) return json(502, { error: "Model returned no content." });
       return json(200, {
@@ -249,18 +264,18 @@ export async function POST(req: NextRequest) {
     }
 
     // Extract and clean the main message
-    const messageRaw = (parsed?.message ?? "").toString().trim();
+    const messageRaw = (obj?.message ?? "").toString().trim();
     debugLog("parsed_message_image", messageRaw);
     const message = sanitizeLatex(messageRaw);
-    const questionText = (parsed?.question_text ?? "").toString().trim();
+    const questionText = (obj?.question_text ?? "").toString().trim();
     // We no longer use AI to name boards
 
-    // Extract any additional fields that might be present in the response
+    // Extract additional fields that might be present in the response
     // These are included for backward compatibility with different response formats
-    const answerPlain = (parsed?.answer_plain ?? "").toString().trim();
-    const answerLatex = (parsed?.answer_latex ?? "").toString().trim();
-    const explanation = (parsed?.explanation ?? "").toString().trim();
-    const modeCategory = readModeCategory(parsed);
+    const answerPlain = (obj?.answer_plain ?? "").toString().trim();
+    const answerLatex = (obj?.answer_latex ?? "").toString().trim();
+    const explanation = (obj?.explanation ?? "").toString().trim();
+    const modeCategory = readModeCategory(obj);
 
     // Return the structured response (include questionText and boardId for UI)
     const looksUnreadable = /could not read|can't read|cannot read|unable to read|unreadable|meaningless scribbles|could not parse|can't parse|cannot parse|unable to parse|no (?:problem|question) found|nothing (?:to solve|to answer)|image (?:is )?(?:blank|empty|unclear)/i.test(
@@ -285,10 +300,9 @@ export async function POST(req: NextRequest) {
       modeCategory,
     });
     
-  } catch (err: any) {
-    // Handle any errors that occur during processing
-    const message =
-      err?.response?.data?.error?.message || err?.message || "Unknown server error.";
+  } catch (err: unknown) {
+    // Handle errors that occur during processing
+    const message = err instanceof Error ? err.message : "Unknown server error.";
     console.error("solve route error:", err);
     return json(500, { error: message });
   }

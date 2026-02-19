@@ -7,10 +7,16 @@ import { UserAuth } from "@/context/AuthContext";
 export default function AuthControls() {
   const router = useRouter();
   const pathname = usePathname();
-  const ctx = (UserAuth() as any) || [];
+  type AuthUser = { uid: string; displayName?: string | null };
+  const rawCtx = UserAuth();
+  const ctx = (Array.isArray(rawCtx) ? rawCtx : []) as unknown as [
+    AuthUser | null,
+    (() => Promise<void>) | undefined,
+    (() => Promise<void>) | undefined,
+  ];
   const user = ctx[0];
-  const googleSignIn = ctx[1] as (() => Promise<void>) | undefined;
-  const logOut = ctx[2] as (() => Promise<void>) | undefined;
+  const googleSignIn = ctx[1];
+  const logOut = ctx[2];
 
   async function onSignIn() {
     try {

@@ -56,9 +56,16 @@ export default function ManimPage() {
         const rsp = await fetch(
           `/api/manim/status?jobId=${encodeURIComponent(jobId)}`,
         );
-        const data = (await rsp.json()) as any;
-        if (!rsp.ok) throw new Error(data?.error || `status ${rsp.status}`);
-        if (!cancelled) setStatus(data as ManimStatus);
+        const data = (await rsp.json()) as unknown;
+        const obj =
+          data && typeof data === "object"
+            ? (data as Record<string, unknown>)
+            : {};
+        if (!rsp.ok)
+          throw new Error(
+            (obj.error ?? "").toString() || `status ${rsp.status}`,
+          );
+        if (!cancelled) setStatus(obj as unknown as ManimStatus);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -88,10 +95,15 @@ export default function ManimPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ prompt: p, clientId }),
       });
-      const data = (await rsp.json()) as any;
-      if (!rsp.ok) throw new Error(data?.error || `start ${rsp.status}`);
+      const data = (await rsp.json()) as unknown;
+      const obj =
+        data && typeof data === "object"
+          ? (data as Record<string, unknown>)
+          : {};
+      if (!rsp.ok)
+        throw new Error((obj.error ?? "").toString() || `start ${rsp.status}`);
 
-      const id = String(data.jobId || "");
+      const id = String(obj.jobId || "");
       setJobId(id);
       setStatus({
         id,

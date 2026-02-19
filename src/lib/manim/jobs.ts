@@ -29,8 +29,12 @@ type Store = {
   activeByClient: Map<string, string>;
 };
 
+type GlobalWithManimStore = typeof globalThis & {
+  __curiosityManimStore?: Store;
+};
+
 function store(): Store {
-  const g = globalThis as any;
+  const g = globalThis as GlobalWithManimStore;
   if (!g.__curiosityManimStore) {
     g.__curiosityManimStore = {
       jobs: new Map<string, ManimJob>(),

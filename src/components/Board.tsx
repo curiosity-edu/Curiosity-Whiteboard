@@ -20,6 +20,33 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+};
+
+type SpeechRecognitionAlternativeLike = { transcript: string };
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  0: SpeechRecognitionAlternativeLike;
+};
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+};
+type SpeechRecognitionErrorEventLike = { error?: string };
+
+type WindowWithSpeechRecognition = Window & {
+  SpeechRecognition?: new () => SpeechRecognitionLike;
+  webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+};
+
 /**
  * Board component that provides a collaborative whiteboard with AI integration.
  * Users can draw or write math problems and get AI-powered solutions.
@@ -55,7 +82,7 @@ export default function Board({ boardId }: { boardId: string }) {
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [archive, setArchive] = React.useState<HistoryItem[] | null>(null);
   const historyScrollRef = React.useRef<HTMLDivElement | null>(null);
-  const recognitionRef = React.useRef<any | null>(null);
+  const recognitionRef = React.useRef<SpeechRecognitionLike | null>(null);
   const interimRef = React.useRef<string>("");
   const finalVoiceRef = React.useRef<string>("");
   const submitVoiceOnStopRef = React.useRef<boolean>(false);
@@ -67,7 +94,13 @@ export default function Board({ boardId }: { boardId: string }) {
   const [editorReady, setEditorReady] = React.useState(false);
   const [boardItems, setBoardItems] = React.useState<HistoryItem[]>([]);
 
-  const ctx = (UserAuth() as any) || [];
+  type AuthUser = { uid: string };
+  const rawCtx = UserAuth();
+  const ctx = (Array.isArray(rawCtx) ? rawCtx : []) as unknown as [
+    AuthUser | null,
+    unknown?,
+    unknown?,
+  ];
   const user = ctx[0];
 
   const renameModeBoardIdGlobalKey = "curiosity:renameModeBoardId";
@@ -116,15 +149,18 @@ export default function Board({ boardId }: { boardId: string }) {
         return;
       }
       const cleaned = parsed
-        .filter((x: any) => x && typeof x === "object")
-        .map((x: any) => ({
-          id: String(x.id || ""),
-          text: String(x.text || ""),
-          ts: Number(x.ts || 0),
-          question: x.question ? String(x.question) : undefined,
-          modeCategory: x.modeCategory ? String(x.modeCategory) : undefined,
-        }))
-        .filter((x: any) => x.id && x.text);
+        .filter((x: unknown) => x && typeof x === "object")
+        .map((x: unknown) => {
+          const o = x as Record<string, unknown>;
+          return {
+            id: String(o.id || ""),
+            text: String(o.text || ""),
+            ts: Number(o.ts || 0),
+            question: o.question ? String(o.question) : undefined,
+            modeCategory: o.modeCategory ? String(o.modeCategory) : undefined,
+          };
+        })
+        .filter((x) => x.id && x.text);
       setAiItems(cleaned);
     } catch {
       setAiItems([]);
@@ -229,7 +265,7 @@ export default function Board({ boardId }: { boardId: string }) {
         return `\n\n$$${String(inner).trim()}$$\n\n`;
       });
 
-      // Collapse any accidental $$$ or longer runs into $$.
+      // Collapse accidental $$$ or longer runs into $$.
       out = out.replace(/\${3,}/g, "$$");
       // Fix cases like "$$$a+b$^2...$$" where a stray $ appears right after $$.
       out = out.replace(/\$\$\s*\$/g, "$$");
@@ -621,7 +657,7 @@ export default function Board({ boardId }: { boardId: string }) {
     return (
       <ReactMarkdown
         remarkPlugins={[remarkMath]}
-        rehypePlugins={[rehypeKatex] as any}
+        rehypePlugins={[rehypeKatex]}
         components={{
           p: (props) => (
             <p className="whitespace-pre-wrap leading-6">{props.children}</p>
@@ -643,8 +679,13 @@ export default function Board({ boardId }: { boardId: string }) {
       if (user) {
         const ref = fsDoc(database, "users", user.uid, "boards", boardId);
         const snap = await getDoc(ref);
-        const data: any = snap.exists() ? snap.data() : null;
-        items = Array.isArray(data?.items) ? (data.items as HistoryItem[]) : [];
+        const data: unknown = snap.exists() ? snap.data() : null;
+        const obj =
+          data && typeof data === "object"
+            ? (data as Record<string, unknown>)
+            : {};
+        const rawItems = obj.items;
+        items = Array.isArray(rawItems) ? (rawItems as HistoryItem[]) : [];
       } else {
         items = [];
       }
@@ -690,16 +731,16 @@ export default function Board({ boardId }: { boardId: string }) {
     }
 
     window.addEventListener(
-      "curiosity:addToCanvasChanged" as any,
+      "curiosity:addToCanvasChanged",
       onAddToCanvasChanged,
     );
-    window.addEventListener("curiosity:openHistory" as any, onOpenHistory);
+    window.addEventListener("curiosity:openHistory", onOpenHistory);
     return () => {
       window.removeEventListener(
-        "curiosity:addToCanvasChanged" as any,
+        "curiosity:addToCanvasChanged",
         onAddToCanvasChanged,
       );
-      window.removeEventListener("curiosity:openHistory" as any, onOpenHistory);
+      window.removeEventListener("curiosity:openHistory", onOpenHistory);
     };
   }, [openHistory]);
 
@@ -741,13 +782,11 @@ export default function Board({ boardId }: { boardId: string }) {
   const onMount = React.useCallback((editor: Editor) => {
     editorRef.current = editor;
     try {
-      // @ts-ignore - Update editor state to allow editing
+      // @ts-expect-error - Update editor state to allow editing
       editor.updateInstanceState({ isReadonly: false, isReadOnly: false });
       // Some TLDraw versions expose a direct helper
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const anyEditor: any = editor as any;
-      if (typeof anyEditor.setReadOnly === "function")
-        anyEditor.setReadOnly(false);
+      const maybe = editor as unknown as { setReadOnly?: (v: boolean) => void };
+      if (typeof maybe.setReadOnly === "function") maybe.setReadOnly(false);
     } catch {}
     console.log("[Board] Editor mounted:", editor);
     // Force downstream effects (like Firestore snapshot load) to run against
@@ -774,10 +813,14 @@ export default function Board({ boardId }: { boardId: string }) {
         isLoadingDocRef.current = true;
         const ref = fsDoc(database, "users", user.uid, "boards", boardId);
         const snap = await getDoc(ref);
-        const data: any = snap.exists() ? snap.data() : null;
+        const data: unknown = snap.exists() ? snap.data() : null;
+        const obj =
+          data && typeof data === "object"
+            ? (data as Record<string, unknown>)
+            : {};
 
-        const items = Array.isArray(data?.items)
-          ? (data.items as HistoryItem[])
+        const items = Array.isArray(obj.items)
+          ? (obj.items as HistoryItem[])
           : [];
         if (!cancelled) setBoardItems(items);
 
@@ -792,13 +835,13 @@ export default function Board({ boardId }: { boardId: string }) {
         } catch {}
 
         const remoteUpdatedAt =
-          typeof data?.updatedAt === "number" ? data.updatedAt : 0;
+          typeof obj.updatedAt === "number" ? (obj.updatedAt as number) : 0;
         const shouldApplyRemote = remoteUpdatedAt > localUpdatedAt;
 
-        if (shouldApplyRemote && data?.doc) {
+        if (shouldApplyRemote && obj.doc) {
           try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            loadSnapshot((editor as any).store, data.doc);
+            const store = (editor as unknown as { store: unknown }).store;
+            loadSnapshot(store as never, obj.doc);
             console.log("[Board] Loaded snapshot for", boardId);
             try {
               const k = `boardLocalUpdatedAt:${user.uid}:${boardId}`;
@@ -826,13 +869,12 @@ export default function Board({ boardId }: { boardId: string }) {
     const editor = editorRef.current;
     if (!editor || !boardId) return;
     if (!user) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const store: any = (editor as any).store;
+    const store = (editor as unknown as { store: unknown }).store;
 
     const saveNow = async () => {
       if (isLoadingDocRef.current) return;
       try {
-        const snap = getSnapshot(store);
+        const snap = getSnapshot(store as never);
         const ref = fsDoc(database, "users", user.uid, "boards", boardId);
         const now = Date.now();
         try {
@@ -861,7 +903,14 @@ export default function Board({ boardId }: { boardId: string }) {
     };
 
     const unlisten =
-      store?.listen?.(
+      (
+        store as {
+          listen?: (
+            fn: () => void,
+            opts?: { scope?: string; source?: string },
+          ) => () => void;
+        }
+      )?.listen?.(
         () => {
           if (isLoadingDocRef.current) return;
           // Track last local edit time so we can decide whether Firestore is newer on refresh.
@@ -899,7 +948,7 @@ export default function Board({ boardId }: { boardId: string }) {
     } catch {}
     return () => {
       try {
-        // Flush any pending changes before unmount / board switch.
+        // Flush pending changes before unmount / board switch.
         if (saveTimerRef.current) {
           try {
             clearTimeout(saveTimerRef.current);
@@ -937,15 +986,14 @@ export default function Board({ boardId }: { boardId: string }) {
   /**
    * Calculates the bounding box that contains all specified shapes
    */
-  function getUnionBounds(editor: any, ids: TLShapeId[]) {
+  function getUnionBounds(editor: Editor, ids: TLShapeId[]) {
     let minX = Infinity,
       minY = Infinity,
       maxX = -Infinity,
       maxY = -Infinity;
 
     for (const id of ids) {
-      const b =
-        editor.getShapePageBounds?.(id) ?? editor.getPageBounds?.(id) ?? null;
+      const b = editor.getShapePageBounds?.(id) ?? null;
       if (!b) continue;
 
       const x = b.x ?? b.minX ?? 0;
@@ -1148,9 +1196,8 @@ export default function Board({ boardId }: { boardId: string }) {
   // Voice input: start/stop recognition
   function startVoiceInput() {
     try {
-      const SR: any =
-        (window as any).SpeechRecognition ||
-        (window as any).webkitSpeechRecognition;
+      const w = window as WindowWithSpeechRecognition;
+      const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
       if (!SR) {
         alert("Speech recognition is not supported in this browser.");
         return;
@@ -1164,7 +1211,7 @@ export default function Board({ boardId }: { boardId: string }) {
       rec.lang = "en-US";
       rec.interimResults = true;
       rec.continuous = true;
-      rec.onresult = (event: any) => {
+      rec.onresult = (event: SpeechRecognitionEventLike) => {
         let interim = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const res = event.results[i];
@@ -1176,7 +1223,7 @@ export default function Board({ boardId }: { boardId: string }) {
         }
         interimRef.current = interim;
       };
-      rec.onerror = (e: any) => {
+      rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
         console.error("[Voice] error:", e);
       };
       rec.onend = () => {
@@ -1186,7 +1233,7 @@ export default function Board({ boardId }: { boardId: string }) {
           submitVoiceOnStopRef.current = false;
           if (spoken) {
             suppressCanvasTextRef.current = true;
-            void (askAI(spoken) as any)?.finally?.(() => {
+            void Promise.resolve(askAI(spoken)).finally(() => {
               suppressCanvasTextRef.current = false;
             });
           }

@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { getManimJob } from "@/lib/manim/jobs";
 import { getManimRunnerMode } from "@/lib/manim/runner";
+import { Readable } from "node:stream";
 
 export const runtime = "nodejs";
 
@@ -37,7 +38,9 @@ export async function GET(req: NextRequest) {
     const info = await stat(job.videoPath);
     const stream = createReadStream(job.videoPath);
 
-    return new NextResponse(stream as any, {
+    const webStream = Readable.toWeb(stream) as unknown as ReadableStream;
+
+    return new NextResponse(webStream, {
       headers: {
         "content-type": "video/mp4",
         "content-length": String(info.size),

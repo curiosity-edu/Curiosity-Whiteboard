@@ -24,6 +24,14 @@ import { MdAnimation } from "react-icons/md";
 const DEFAULT_BOARD_TITLE = "Untitled Board";
 const SHOW_ADD_TO_CANVAS_OPTION = false;
 
+type BoardSummary = {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  count: number;
+};
+
 function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -34,10 +42,21 @@ export default function MyBoardsSidebar({
   currentBoardId?: string;
 }) {
   const router = useRouter();
-  const ctx = (UserAuth() as any) || [];
+  type AuthUser = {
+    uid: string;
+    displayName?: string | null;
+    photoURL?: string | null;
+    email?: string | null;
+  };
+  const rawCtx = UserAuth();
+  const ctx = (Array.isArray(rawCtx) ? rawCtx : []) as unknown as [
+    AuthUser | null,
+    (() => Promise<void>) | undefined,
+    (() => Promise<void>) | undefined,
+  ];
   const user = ctx[0];
-  const googleSignIn = ctx[1] as (() => Promise<void>) | undefined;
-  const logOut = ctx[2] as (() => Promise<void>) | undefined;
+  const googleSignIn = ctx[1];
+  const logOut = ctx[2];
 
   const ensuredBoardRef = React.useRef(false);
 
@@ -55,8 +74,8 @@ export default function MyBoardsSidebar({
     } catch {}
   }, [open]);
 
-  const [boards, setBoards] = React.useState<any[]>([]);
-  const boardsRef = React.useRef<any[]>([]);
+  const [boards, setBoards] = React.useState<BoardSummary[]>([]);
+  const boardsRef = React.useRef<BoardSummary[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [menuOpenId, setMenuOpenId] = React.useState<string | null>(null);
@@ -138,13 +157,21 @@ export default function MyBoardsSidebar({
       q,
       async (snap) => {
         const list = snap.docs.map((d) => {
-          const data: any = d.data();
-          const items = Array.isArray(data?.items) ? data.items : [];
+          const data: unknown = d.data();
+          const maybe = (data && typeof data === "object" ? data : {}) as {
+            title?: unknown;
+            createdAt?: unknown;
+            updatedAt?: unknown;
+            items?: unknown;
+          };
+          const items = Array.isArray(maybe.items) ? maybe.items : [];
           return {
             id: d.id,
-            title: data?.title ?? "",
-            createdAt: data?.createdAt ?? 0,
-            updatedAt: data?.updatedAt ?? 0,
+            title: typeof maybe.title === "string" ? maybe.title : "",
+            createdAt:
+              typeof maybe.createdAt === "number" ? maybe.createdAt : 0,
+            updatedAt:
+              typeof maybe.updatedAt === "number" ? maybe.updatedAt : 0,
             count: items.length,
           };
         });
@@ -302,7 +329,7 @@ export default function MyBoardsSidebar({
     }
   }
 
-  function startRename(b: any) {
+  function startRename(b: BoardSummary) {
     try {
       localStorage.setItem(renameModeBoardIdKey, String(b.id));
       localStorage.setItem(renameModeBoardIdGlobalKey, String(b.id));
@@ -317,7 +344,7 @@ export default function MyBoardsSidebar({
     if (!user) return;
     const id = makeId();
     const now = Date.now();
-    const optimistic = {
+    const optimistic: BoardSummary = {
       id,
       title: DEFAULT_BOARD_TITLE,
       createdAt: now,
@@ -637,7 +664,7 @@ export default function MyBoardsSidebar({
           </div>
         ) : (
           <ul className="space-y-1">
-            {boards.map((b: any) => (
+            {boards.map((b) => (
               <li
                 key={b.id}
                 className="group relative"

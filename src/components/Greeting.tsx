@@ -3,7 +3,13 @@
 import { UserAuth } from "@/context/AuthContext";
 
 export default function Greeting() {
-  const ctx = (UserAuth() as any) || [];
+  type AuthUser = { uid: string; displayName?: string | null };
+  const rawCtx = UserAuth();
+  const ctx = (Array.isArray(rawCtx) ? rawCtx : []) as unknown as [
+    AuthUser | null,
+    unknown?,
+    unknown?,
+  ];
   const user = ctx[0];
   const firstName = (user?.displayName || "").split(" ")[0] || null;
   if (!firstName) return null;

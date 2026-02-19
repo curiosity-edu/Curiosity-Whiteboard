@@ -8,8 +8,15 @@ export const runtime = "nodejs";
 const STORE_FILE = path.join(process.cwd(), "data", "solve_history.json");
 
 type HistoryItem = { question: string; response: string; ts: number };
-type Board = { id: string; title: string; createdAt: number; updatedAt: number; items: HistoryItem[]; doc?: any };
-type StoreShape = { boards: Board[] } | { sessions: any[] } | any;
+type Board = {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  items: HistoryItem[];
+  doc?: unknown;
+};
+type StoreShape = { boards: Board[] } | { sessions: Board[] } | Record<string, unknown>;
 
 async function ensureDir() {
   await fs.mkdir(path.dirname(STORE_FILE), { recursive: true });
@@ -31,8 +38,11 @@ async function writeStore(data: StoreShape) {
 }
 
 function toBoards(shape: StoreShape): Board[] {
-  if (Array.isArray((shape as any).boards)) return (shape as any).boards as Board[];
-  if (Array.isArray((shape as any).sessions)) return (shape as any).sessions as Board[];
+  const obj = shape && typeof shape === "object" ? (shape as Record<string, unknown>) : {};
+  const boards = obj.boards;
+  if (Array.isArray(boards)) return boards as Board[];
+  const sessions = obj.sessions;
+  if (Array.isArray(sessions)) return sessions as Board[];
   return [];
 }
 
@@ -62,11 +72,12 @@ export async function DELETE(_req: NextRequest, context: { params: Promise<{ id:
 export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
-  let body: any = {};
+  let body: unknown = {};
   try {
     body = await req.json();
   } catch {}
-  const t = (body?.title ?? "").toString().trim();
+  const obj = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const t = (obj.title ?? "").toString().trim();
   if (!t) {
     return NextResponse.json({ error: "Title is required." }, { status: 400 });
   }

@@ -29,7 +29,9 @@ export async function GET(req: NextRequest) {
   // Normalize sessions
   let sessions: Session[] = [];
   if (!Array.isArray(shape)) {
-    sessions = Array.isArray((shape as any).sessions) ? (shape as any).sessions : [];
+    const obj = shape && typeof shape === "object" ? (shape as Record<string, unknown>) : {};
+    const raw = obj.sessions;
+    sessions = Array.isArray(raw) ? (raw as Session[]) : [];
   }
 
   if (sessionId) {
