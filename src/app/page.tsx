@@ -86,7 +86,7 @@ export default function Page() {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, router]);
 
   return (
     <main className="h-[calc(100vh-3.5rem)] w-full grid place-items-center bg-white" />

@@ -19,34 +19,29 @@ import { doc as fsDoc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { preprocessMath } from "@/components/board/math";
+import {
+  getSpeechRecognitionCtor,
+  type SpeechRecognitionErrorEventLike,
+  type SpeechRecognitionEventLike,
+  type SpeechRecognitionLike,
+} from "@/components/board/speechRecognition";
 
-type SpeechRecognitionLike = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start: () => void;
-  stop: () => void;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
-  onend: (() => void) | null;
-};
-
-type SpeechRecognitionAlternativeLike = { transcript: string };
-type SpeechRecognitionResultLike = {
-  isFinal: boolean;
-  0: SpeechRecognitionAlternativeLike;
-};
-type SpeechRecognitionEventLike = {
-  resultIndex: number;
-  results: ArrayLike<SpeechRecognitionResultLike>;
-};
-type SpeechRecognitionErrorEventLike = { error?: string };
-
-type WindowWithSpeechRecognition = Window & {
-  SpeechRecognition?: new () => SpeechRecognitionLike;
-  webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-};
-
+/**
+ * Interactive board page.
+ *
+ * Responsibilities:
+ * - Render the TLDraw canvas for the given `boardId`.
+ * - Orchestrate persistence:
+ *   - Signed-in users: Firestore-backed snapshot + chat history.
+ *   - Signed-out users: TLDraw local persistence only.
+ * - Orchestrate the AI solve request and display responses.
+ * - Provide optional voice input (Web SpeechRecognition) for hands-free queries.
+ *
+ * Key invariants:
+ * - When signed in, we must not allow "ghost"/local boards: missing Firestore docs redirect to `/`.
+ * - We avoid overwriting newer local TLDraw state with an older Firestore snapshot.
+ */
 /**
  * Board component that provides a collaborative whiteboard with AI integration.
  * Users can draw or write math problems and get AI-powered solutions.
@@ -72,13 +67,6 @@ export default function Board({ boardId }: { boardId: string }) {
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
   const aiScrollRef = React.useRef<HTMLDivElement | null>(null);
   type HistoryItem = { question: string; response: string; ts: number };
-  type SessionMeta = {
-    id: string;
-    title: string;
-    createdAt: number;
-    updatedAt: number;
-    count: number;
-  };
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [archive, setArchive] = React.useState<HistoryItem[] | null>(null);
   const historyScrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -221,16 +209,19 @@ export default function Board({ boardId }: { boardId: string }) {
     } catch {}
   }, [addToCanvas]);
 
-  function addAIItem(text: string, question?: string, modeCategory?: string) {
-    const item: AIItem = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text,
-      question,
-      modeCategory,
-      ts: Date.now(),
-    };
-    setAiItems((prev) => [item, ...prev]);
-  }
+  const addAIItem = React.useCallback(
+    (text: string, question?: string, modeCategory?: string) => {
+      const item: AIItem = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text,
+        question,
+        modeCategory,
+        ts: Date.now(),
+      };
+      setAiItems((prev) => [item, ...prev]);
+    },
+    [setAiItems],
+  );
 
   function removeAIItem(id: string) {
     setAiItems((prev) => prev.filter((x) => x.id !== id));
@@ -243,398 +234,13 @@ export default function Board({ boardId }: { boardId: string }) {
     el.scrollTop = 0;
   }, [aiItems.length]);
 
-  function preprocessMath(text: string) {
-    let s = (text || "").toString();
-
-    const DEBUG_MATH = (() => {
-      try {
-        return localStorage.getItem("curiosity:debugMath") === "1";
-      } catch {
-        return false;
-      }
-    })();
-
-    function normalizeDollarDelimiters(input: string) {
-      let out = (input || "").toString();
-
-      // Convert TeX inline/display delimiters into $/$$ so remark-math can parse.
-      out = out.replace(/\\\(([^]*?)\\\)/g, (_m, inner) => {
-        return `$${String(inner).trim()}$`;
-      });
-      out = out.replace(/\\\[([^]*?)\\\]/g, (_m, inner) => {
-        return `\n\n$$${String(inner).trim()}$$\n\n`;
-      });
-
-      // Collapse accidental $$$ or longer runs into $$.
-      out = out.replace(/\${3,}/g, "$$");
-      // Fix cases like "$$$a+b$^2...$$" where a stray $ appears right after $$.
-      out = out.replace(/\$\$\s*\$/g, "$$");
-      out = out.replace(/\$\s*\$\$/g, "$$");
-
-      // Fix split inline math like "$a+b$^2" or "$a+b$²" by merging into a single math span.
-      out = out.replace(/\$([^$\n]+?)\$\s*\^\s*([0-9]+)/g, (_m, body, exp) => {
-        return `$${String(body).trim()}^${String(exp).trim()}$`;
-      });
-      out = out.replace(/\$([^$\n]+?)\$\s*([²³])/g, (_m, body, sup) => {
-        const e = sup === "²" ? "2" : sup === "³" ? "3" : "";
-        if (!e) return _m;
-        return `$${String(body).trim()}^${e}$`;
-      });
-
-      function looksLikeProse(t: string) {
-        // If it has multi-letter words and sentence punctuation, it's probably prose.
-        // IMPORTANT: ignore LaTeX command names like "\\mathbf" or "\\nabla" when deciding.
-        const stripped = (t || "")
-          .replace(/\\[A-Za-z]+/g, " ")
-          .replace(/[{}]/g, " ");
-        const hasWord = /\b[a-zA-Z]{3,}\b/.test(stripped);
-        const hasSentence = /[.!?]/.test(t);
-        return hasWord && hasSentence;
-      }
-
-      // Repair $$...$$ blocks:
-      // - If they contain nested $, strip nested $.
-      // - If they contain prose, extract the leading math segment and keep prose outside.
-      out = out.replace(/\$\$([\s\S]*?)\$\$/g, (m, innerRaw, idx, full) => {
-        const inner = String(innerRaw);
-        const noNested = inner.replace(/\$/g, "").trim();
-
-        const sFull = String(full);
-        const before =
-          typeof idx === "number" && idx > 0 ? sFull.slice(idx - 1, idx) : "";
-        const after =
-          typeof idx === "number" && idx + m.length < sFull.length
-            ? sFull.slice(idx + m.length, idx + m.length + 1)
-            : "";
-        const isInlineContext =
-          (before && before !== "\n") || (after && after !== "\n");
-
-        const hasStrongMathSignal =
-          /\\(frac|sqrt|sum|int|oint|iint|iiint|nabla|partial|cdot|times|mathbf|left|right)\b/.test(
-            inner,
-          ) || /[=^_]/.test(noNested);
-
-        // If $$...$$ is used inline within a sentence, treat it as inline math.
-        // Otherwise remark-math parsing is brittle and we risk mangling it.
-        if (
-          isInlineContext &&
-          !noNested.includes("\n") &&
-          noNested.length < 240
-        ) {
-          return `$${noNested}$`;
-        }
-
-        // If the model incorrectly wrapped a full sentence in $$...$$, unwrap it.
-        // But never unwrap blocks that have strong math signals (e.g. Stokes).
-        if (!hasStrongMathSignal && looksLikeProse(noNested)) {
-          // Try to extract a leading equation-like chunk, stopping before common prose linkers.
-          // Example: "a+b^2 = a^2 + b^2 is that it doesn't..." -> "$a+b^2 = a^2 + b^2$ is that it doesn't..."
-          const linkerMatch = noNested.match(
-            /\b(is|are|was|were|that|which|because|since)\b/i,
-          );
-          const cutIdx = linkerMatch?.index;
-          if (typeof cutIdx === "number" && cutIdx > 0) {
-            const left = noNested.slice(0, cutIdx).trim();
-            const right = noNested.slice(cutIdx).trim();
-            if (left && /[=^_]/.test(left)) {
-              return `$${left}$ ${right}`;
-            }
-          }
-          return noNested;
-        }
-
-        // Otherwise, keep as display math (ensure on its own lines).
-        return `\n\n$$\n${noNested}\n$$\n\n`;
-      });
-
-      // If $$...$$ occurs inline inside a sentence, treat it as inline math $...$
-      // so remark-math can reliably parse it.
-      out = out.replace(/\$\$([^\n]+?)\$\$/g, (m, inner, idx, full) => {
-        const before = idx > 0 ? String(full).slice(idx - 1, idx) : "";
-        const after =
-          idx + m.length < String(full).length
-            ? String(full).slice(idx + m.length, idx + m.length + 1)
-            : "";
-        const isInline =
-          (before && before !== "\n") || (after && after !== "\n");
-        if (!isInline) return m;
-        return `$${String(inner).trim()}$`;
-      });
-      return out;
-    }
-
-    s = normalizeDollarDelimiters(s);
-
-    function mapOutsideMathAndCode(
-      input: string,
-      fn: (chunk: string) => string,
-    ) {
-      return input
-        .split(/(```[\s\S]*?```|`[^`]*`|\$\$[\s\S]*?\$\$|\$[^$\n]*\$)/g)
-        .map((chunk) => {
-          if (!chunk) return chunk;
-          if (chunk.startsWith("```") || chunk.startsWith("`")) return chunk;
-          if (chunk.startsWith("$$") && chunk.endsWith("$$")) return chunk;
-          if (chunk.startsWith("$") && chunk.endsWith("$")) return chunk;
-          return fn(chunk);
-        })
-        .join("");
-    }
-
-    function wrapLatexRuns(input: string) {
-      return mapOutsideMathAndCode(input, (chunk) => {
-        const normalized = chunk
-          .replace(/\\mathbf\b/g, "\\mathbf")
-          .replace(/\\d\b/g, "d");
-
-        const cmd =
-          "\\\\(?:int|oint|iint|iiint|nabla|partial|mathbf|cdot|times|frac|sqrt|left|right)\\b";
-        const hasMathSignal = (t: string) =>
-          /=/.test(t) || /\\\\(cdot|times)\\b/.test(t) || /[_^]/.test(t);
-
-        let out = normalized;
-
-        out = out.replace(
-          new RegExp(
-            `(${cmd}[\\s\\S]*?)(?=(\\n\\s*\\n)|(\\.\\s+(?=[A-Z][a-z]))|$)`,
-            "g",
-          ),
-          (_m, body) => {
-            const t = String(body).trim();
-            if (!t) return body;
-            if (!hasMathSignal(t)) return body;
-            if (t.length > 1600) return body;
-            return `\n\n$$\n${t}\n$$\n\n`;
-          },
-        );
-
-        out = out.replace(
-          /(\([^\)\n]{1,80}\)\s*(?:\^\s*\d+|[²³])\s*=\s*[^\n\.]{1,180})/g,
-          (m) => {
-            const t = String(m).trim();
-            if (!t) return m;
-            return `$${t}$`;
-          },
-        );
-
-        out = out.replace(
-          /\(\s*([^\)]+?)\s*\)\s*(?:\^\s*([0-9]+)|([²³]))/g,
-          (m, inner, expCaret, expSup) => {
-            if (String(m).includes("$")) return m;
-            const v = String(inner);
-            const e =
-              typeof expCaret === "string" && expCaret
-                ? expCaret
-                : expSup === "²"
-                  ? "2"
-                  : expSup === "³"
-                    ? "3"
-                    : "";
-            if (!e) return m;
-            if (!/[+\-*/=^_]/.test(v)) return m;
-            return `$(${v.trim()})^${e}$`;
-          },
-        );
-
-        return out;
-      });
-    }
-
-    // The model already produces well-formed math most of the time.
-    // At this stage, we only:
-    // 1) normalize delimiters (\( \)/\[ \]/malformed $$)
-    // 2) wrap raw TeX command runs that leaked outside math
-    // Further heuristic rewrites below have proven destructive (they can break correct $$ blocks).
-    s = wrapLatexRuns(s);
-    s = normalizeDollarDelimiters(s);
-
-    if (DEBUG_MATH) {
-      try {
-        console.log("[math][debug] preprocessMath output:", s);
-      } catch {}
-    }
-
-    return s;
-
-    function looksMathy(inner: string) {
-      const t = (inner || "").trim();
-      if (!t) return false;
-      // Must contain a math operator / latex command.
-      const hasMathSignal =
-        /[=^_]/.test(t) ||
-        /[+\-*/]/.test(t) ||
-        /\\(frac|sqrt|sum|int|oint|iint|iiint|nabla|partial|cdot|times|mathbf|vec|pi|theta|lambda|Delta|Gamma)\b/.test(
-          t,
-        );
-      if (!hasMathSignal) return false;
-      // Avoid wrapping normal sentences like "(this is a note)".
-      const looksLikeSentence = /[a-zA-Z]{3,}.*\s+[a-zA-Z]{3,}/.test(t);
-      if (looksLikeSentence) return false;
-      // Only allow a conservative set of characters.
-      if (!/^[0-9A-Za-z\s+\-*/^_=().,\\]+$/.test(t)) return false;
-      return true;
-    }
-
-    // If the model outputs latex-like tokens without $...$, wrap common patterns so KaTeX can render.
-    // Example: sum_k=1^100 k  -> $\sum_{k=1}^{100} k$
-    s = s.replace(
-      /(^|\s)sum_([A-Za-z])\s*=\s*([0-9]+)\s*\^\s*([0-9]+)\s*([A-Za-z])?(?=\s|$)/g,
-      (_m, pre, idx, a, b, tail) =>
-        `${pre}$\\sum_{${idx}=${a}}^{${b}}${tail ? " " + tail : ""}$`,
-    );
-
-    // Wrap standalone LaTeX-looking lines into display math early, BEFORE we try
-    // to wrap parenthesized sub-expressions. This avoids fragmenting equations like Stokes'.
-    s = s
-      .split("\n")
-      .map((line) => {
-        const t = line.trim();
-        if (!t) return line;
-        if (t.includes("$$") || t.includes("$") || t.startsWith("```"))
-          return line;
-        const startsWithMathCommand =
-          /^\\(int|oint|iint|iiint|sum|prod|lim|nabla|partial|frac|sqrt)\b/.test(
-            t,
-          );
-        const equationLike =
-          /\S/.test(t) &&
-          /=/.test(t) &&
-          /\\(int|oint|iint|iiint|nabla|partial|cdot|times|mathbf)\b/.test(t);
-        const looksLatex =
-          /\\(frac|sqrt|sum|int|oint|iint|iiint|left|right|nabla|partial|cdot|times|mathbf)\b/.test(
-            t,
-          ) || /[_^]/.test(t);
-        const looksLikeSentence = /[a-zA-Z].*\s+[a-zA-Z]/.test(t);
-        if (startsWithMathCommand) return `\n\n$$${t}$$\n\n`;
-        if (equationLike) return `\n\n$$${t}$$\n\n`;
-        if (looksLatex && !looksLikeSentence) return `\n\n$$${t}$$\n\n`;
-        return line;
-      })
-      .join("\n");
-
-    // Convert common "math in brackets" patterns into display math.
-    // Example: [(a+b)^2 = a^2 + 2ab + b^2.] -> $$ (a+b)^2 = a^2 + 2ab + b^2. $$
-    function mapOutsideDisplayMathBlocks(
-      input: string,
-      fn: (chunk: string) => string,
-    ) {
-      return input
-        .split(/(\$\$[\s\S]*?\$\$)/g)
-        .map((chunk) => {
-          if (chunk.startsWith("$$") && chunk.endsWith("$$")) return chunk;
-          return fn(chunk);
-        })
-        .join("");
-    }
-
-    s = mapOutsideDisplayMathBlocks(s, (chunk) => {
-      return chunk.replace(/\[\s*([^\]]+?)\s*\]/g, (m, inner) => {
-        if (String(inner).includes("$")) return m;
-        if (!looksMathy(inner)) return m;
-        return `\n\n$$${String(inner).replace(/\$/g, "")}$$\n\n`;
-      });
-    });
-
-    // Convert double-parenthesized math like ((a+b)^2 = a^2 + b^2) into display math.
-    s = mapOutsideDisplayMathBlocks(s, (chunk) => {
-      return chunk.replace(/\(\(\s*([^\)]{3,}?)\s*\)\)/g, (m, inner) => {
-        if (String(inner).includes("$")) return m;
-        if (!looksMathy(inner)) return m;
-        return `\n\n$$${String(inner).replace(/\$/g, "")}$$\n\n`;
-      });
-    });
-
-    // Wrap ( ... )^n as a single inline math chunk so we don't end up with "$a+b$^2".
-    s = mapOutsideDisplayMathBlocks(s, (chunk) => {
-      return chunk.replace(
-        /\(\s*([^\)]+?)\s*\)\s*(?:\^\s*({[^}]+}|[0-9]+)|([²³]))/g,
-        (_m, base, expCaret, expSup) => {
-          const b = String(base).replace(/\$/g, "").trim();
-          const eRaw =
-            typeof expCaret === "string" && expCaret
-              ? expCaret
-              : expSup === "²"
-                ? "2"
-                : expSup === "³"
-                  ? "3"
-                  : "";
-          const e = String(eRaw).replace(/\$/g, "").trim();
-          if (!e) return _m;
-          if (!looksMathy(`${b}^${e}`)) {
-            return expSup ? `(${base})^${e}` : `(${base})^${expCaret}`;
-          }
-          return `$(${b})^${e}$`;
-        },
-      );
-    });
-
-    // Convert single parenthesized math terms like (2ab) into inline math.
-    // IMPORTANT: avoid wrapping (a+b) by itself, since that breaks (a+b)^2.
-    s = mapOutsideDisplayMathBlocks(s, (chunk) => {
-      return chunk.replace(/\(\s*([^\)]+?)\s*\)/g, (m, inner, idx, full) => {
-        const v = String(inner);
-        if (v.includes("$")) return m;
-        // If immediately followed by an exponent, let the ( ... )^n rule handle it.
-        const after =
-          typeof idx === "number"
-            ? String(full).slice(
-                idx + String(m).length,
-                idx + String(m).length + 6,
-              )
-            : "";
-        if (/^\s*\^/.test(after)) return m;
-
-        // Only wrap term-like parens: contains digits, LaTeX command, or '='.
-        const termLike =
-          /\d/.test(v) || /\\[A-Za-z]+/.test(v) || v.includes("=");
-        if (!termLike) return m;
-        if (!looksMathy(v)) return m;
-        if (v.includes("=")) return `\n\n$$${v.replace(/\$/g, "")}$$\n\n`;
-        return `$${v.replace(/\$/g, "")}$`;
-      });
-    });
-
-    // Generic fallback: if a line looks like pure math and contains ^ or _ or \\frac/\\sqrt, wrap as display math.
-    s = s
-      .split("\n")
-      .map((line) => {
-        const t = line.trim();
-        if (!t) return line;
-        if (t.includes("$$") || t.includes("$") || t.startsWith("```"))
-          return line;
-        const startsWithMathCommand =
-          /^\\(int|oint|iint|iiint|sum|prod|lim|nabla|partial|frac|sqrt)\b/.test(
-            t,
-          );
-        const equationLike =
-          /\S/.test(t) &&
-          /=/.test(t) &&
-          /\\(int|oint|iint|iiint|nabla|partial|cdot|times|mathbf)\b/.test(t);
-        const looksLatex =
-          /\\(frac|sqrt|sum|int|oint|iint|iiint|left|right|nabla|partial|cdot|times|mathbf)\b/.test(
-            t,
-          ) || /[_^]/.test(t);
-        const looksLikeSentence = /[a-zA-Z].*\s+[a-zA-Z]/.test(t);
-        if (startsWithMathCommand) return `\n\n$$${t}$$\n\n`;
-        if (equationLike) return `\n\n$$${t}$$\n\n`;
-        if (looksLatex && !looksLikeSentence) return `\n\n$$${t}$$\n\n`;
-        return line;
-      })
-      .join("\n");
-
-    s = wrapLatexRuns(s);
-    s = normalizeDollarDelimiters(s);
-
-    if (DEBUG_MATH) {
-      try {
-        console.log("[math][debug] preprocessMath output:", s);
-      } catch {}
-    }
-
-    return s;
-  }
-
   function renderMessage(text: string) {
+    /**
+     * Renders an AI message as markdown + KaTeX.
+     *
+     * We run the text through `preprocessMath` to normalize delimiters so
+     * `remark-math` can reliably parse the content.
+     */
     const raw = (text || "").toString();
     let debug = false;
     try {
@@ -672,7 +278,14 @@ export default function Board({ boardId }: { boardId: string }) {
     );
   }
 
-  async function openHistory() {
+  const openHistory = React.useCallback(async () => {
+    /**
+     * Loads the Q/A history for the current board.
+     *
+     * Side effects:
+     * - Updates `archive` (the displayed history list)
+     * - Opens the history sidebar by setting `historyOpen`
+     */
     setArchive(null);
     try {
       let items: HistoryItem[] = [];
@@ -697,7 +310,7 @@ export default function Board({ boardId }: { boardId: string }) {
     } finally {
       setHistoryOpen(true);
     }
-  }
+  }, [user, boardId]);
 
   // If navigated here via the board tile menu's "Chat History" action,
   // automatically open the history sidebar for this board.
@@ -716,7 +329,7 @@ export default function Board({ boardId }: { boardId: string }) {
         void openHistory();
       }, 0);
     }
-  }, [boardId, user, openHistory]);
+  }, [boardId, openHistory]);
 
   React.useEffect(() => {
     function onAddToCanvasChanged() {
@@ -745,6 +358,12 @@ export default function Board({ boardId }: { boardId: string }) {
   }, [openHistory]);
 
   function stopVoiceInput(opts?: { submit?: boolean }) {
+    /**
+     * Stops speech recognition (if running).
+     *
+     * If `opts.submit` is true, `onend` will treat the buffered transcript as a
+     * question and trigger an AI request.
+     */
     try {
       submitVoiceOnStopRef.current = Boolean(opts?.submit);
       keepListeningRef.current = false;
@@ -780,6 +399,13 @@ export default function Board({ boardId }: { boardId: string }) {
    * @param editor - The Tldraw editor instance
    */
   const onMount = React.useCallback((editor: Editor) => {
+    /**
+     * TLDraw mount callback.
+     *
+     * We store the editor instance in a ref and bump a version number so
+     * downstream effects (Firestore load, autosave wiring) can re-run against
+     * the latest mounted editor.
+     */
     editorRef.current = editor;
     try {
       // @ts-expect-error - Update editor state to allow editing
@@ -798,6 +424,14 @@ export default function Board({ boardId }: { boardId: string }) {
   // Load persisted TLDraw snapshot + items from Firestore when signed in.
   // This must not live in onMount because onMount captures stale auth state.
   React.useEffect(() => {
+    /**
+     * Firestore load: hydrate TLDraw snapshot + chat history.
+     *
+     * Important behavior:
+     * - If signed out, we do *not* touch Firestore (TLDraw local persistence only).
+     * - If signed in, we only apply the remote snapshot if it is newer than our
+     *   locally-edited version (tracked via localStorage timestamps).
+     */
     const editor = editorRef.current;
     if (!editorMountVersion || !editor || !boardId) return;
 
@@ -866,6 +500,13 @@ export default function Board({ boardId }: { boardId: string }) {
 
   // Debounced autosave when the TLDraw store changes
   React.useEffect(() => {
+    /**
+     * Debounced autosave for signed-in users.
+     *
+     * We listen to TLDraw store updates and write the full snapshot to Firestore.
+     * `updateDoc` is preferred (to avoid deep merges retaining deleted keys),
+     * with a fallback to `setDoc(..., { merge: true })` if the doc doesn't exist.
+     */
     const editor = editorRef.current;
     if (!editor || !boardId) return;
     if (!user) return;
@@ -884,7 +525,7 @@ export default function Board({ boardId }: { boardId: string }) {
             doc: snap,
             updatedAt: now,
           });
-        } catch (e) {
+        } catch {
           // If the document doesn't exist yet (or update fails), fall back to setDoc to create it.
           await setDoc(
             ref,
@@ -967,6 +608,12 @@ export default function Board({ boardId }: { boardId: string }) {
   }, [boardId, editorReady, user]);
 
   function addResponseToCanvas(text: string) {
+    /**
+     * Creates a TLDraw text shape containing the given AI response.
+     *
+     * This is gated by `suppressCanvasTextRef` to ensure voice-triggered queries
+     * do not auto-insert text into the canvas.
+     */
     if (suppressCanvasTextRef.current) return;
     const editor = editorRef.current;
     if (!editor) return;
@@ -1038,6 +685,15 @@ export default function Board({ boardId }: { boardId: string }) {
    */
   const askAI = React.useCallback(
     async (questionFromVoice?: string) => {
+      /**
+       * Main "solve" flow.
+       *
+       * Steps:
+       * - Export selected shapes (or full page) as an image.
+       * - POST to `/api/solve` including optional text question + history.
+       * - Display the response in the AI panel.
+       * - Persist the Q/A entry to Firestore when signed in.
+       */
       const editor = editorRef.current;
       if (!editor) {
         alert("Editor not ready yet.");
@@ -1190,14 +846,20 @@ export default function Board({ boardId }: { boardId: string }) {
         setLoading(false);
       }
     },
-    [addToCanvas, boardItems, user],
+    [addToCanvas, boardItems, user, addAIItem, boardId],
   );
 
   // Voice input: start/stop recognition
   function startVoiceInput() {
+    /**
+     * Starts SpeechRecognition and wires up `onresult`/`onend`.
+     *
+     * Recognition is used in a "buffer and submit" mode:
+     * - We accumulate interim + final transcripts.
+     * - On stop, we optionally call `askAI(transcript)`.
+     */
     try {
-      const w = window as WindowWithSpeechRecognition;
-      const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
+      const SR = getSpeechRecognitionCtor(window);
       if (!SR) {
         alert("Speech recognition is not supported in this browser.");
         return;

@@ -171,7 +171,7 @@ AI responses support Markdown with math rendered via KaTeX. The pipeline is desi
   - Display math must be formatted with `$$` delimiters on their own lines.
   - The model must not output any TeX commands (backslashes) outside of math delimiters.
 - Client-side normalization (in `src/components/Board.tsx`):
-  - `preprocessMath()` runs before rendering.
+  - `preprocessMath()` runs before rendering (implemented in `src/components/board/math.ts`).
   - Converts `\( ... \)` to `$...$` and `\[ ... \]` to display `$$...$$`.
   - Repairs malformed dollar delimiters and normalizes display math to the canonical form:
     - `\n\n$$\n...\n$$\n\n`
@@ -352,6 +352,9 @@ Notes:
 - `src/components/MyBoardsSidebar.tsx` — Client sidebar listing boards, hover-delete with confirmation, navigation, and open-state persistence.
 - `src/app/board/[id]/page.tsx` — Server page that renders `<Board boardId={id} />`.
 - `src/components/Board.tsx` — Client TLDraw board + AI Panel. Calls `/api/solve`, shows responses, and persists board state/history to Firestore when signed in.
+- `src/components/board/math.ts` — Client-side math/LaTeX normalization used before rendering AI responses (Markdown + KaTeX).
+- `src/components/board/speechRecognition.ts` — Minimal SpeechRecognition typings + helper to select the browser constructor.
+- `src/components/boards/sidebarUtils.ts` — Pure helper utilities for MyBoardsSidebar (ids, localStorage keys, Firestore snapshot narrowing).
 - `src/app/api/solve/route.ts` — Accepts `image` (+ optional `history`) and calls OpenAI. Stateless (no server-side persistence).
 - `src/app/manim/page.tsx` — Generative Manim UI: prompt input, generation state, status polling, logs, and MP4 playback.
 - `src/app/api/manim/start/route.ts` — Starts a Manim generation job (local runner in dev, remote worker on Vercel).

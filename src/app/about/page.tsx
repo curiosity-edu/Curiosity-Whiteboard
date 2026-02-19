@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { Great_Vibes } from "next/font/google";
 
 const greatVibes = Great_Vibes({ subsets: ["latin"], weight: "400" });
@@ -19,10 +20,13 @@ export default function AboutPage() {
         </div>
         <div className="relative min-h-[60px] mb-2">
           {/* Logo (optional) — place /public/textblack.png if available */}
-          <img
+          <Image
             src="/textred.png"
             alt="Curiosity Education Logo"
+            width={250}
+            height={60}
             className="w-[250px] h-auto"
+            priority
           />
         </div>
 

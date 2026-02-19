@@ -3,8 +3,17 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { UserAuth } from "@/context/AuthContext";
 import { database } from "@/lib/firebase";
+import {
+  DEFAULT_BOARD_TITLE,
+  makeBoardId,
+  pendingRenameStorageKey,
+  renameModeStorageKey,
+  snapshotToBoardSummary,
+  type BoardSummary,
+} from "@/components/boards/sidebarUtils";
 import {
   collection,
   deleteDoc,
@@ -21,21 +30,20 @@ import { FcAbout } from "react-icons/fc";
 import { IoIosCreate } from "react-icons/io";
 import { MdAnimation } from "react-icons/md";
 
-const DEFAULT_BOARD_TITLE = "Untitled Board";
 const SHOW_ADD_TO_CANVAS_OPTION = false;
 
-type BoardSummary = {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  count: number;
-};
-
-function makeId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
+/**
+ * Sidebar that lists a signed-in user's boards and provides navigation + board management.
+ *
+ * Responsibilities:
+ * - Subscribe to the user's boards collection in Firestore (ordered by `updatedAt`).
+ * - Handle create / rename / delete flows.
+ * - Persist small UI state in localStorage (collapsed state, rename mode state).
+ *
+ * Implementation notes:
+ * - Rename mode is coordinated via localStorage + a custom DOM event (`curiosity:renameModeChanged`)
+ *   so the TLDraw canvas can suppress auto-focus when an inline rename input is active.
+ */
 export default function MyBoardsSidebar({
   currentBoardId,
 }: {
@@ -91,15 +99,15 @@ export default function MyBoardsSidebar({
   const renameInputRef = React.useRef<HTMLInputElement | null>(null);
   const renameGraceUntilRef = React.useRef<number>(0);
 
-  const newBoardPendingRenameKey = React.useMemo(() => {
-    const uid = user?.uid ? String(user.uid) : "anon";
-    return `curiosity:pendingRenameBoardId:${uid}`;
-  }, [user?.uid]);
+  const newBoardPendingRenameKey = React.useMemo(
+    () => pendingRenameStorageKey(user?.uid),
+    [user?.uid],
+  );
 
-  const renameModeBoardIdKey = React.useMemo(() => {
-    const uid = user?.uid ? String(user.uid) : "anon";
-    return `curiosity:renameModeBoardId:${uid}`;
-  }, [user?.uid]);
+  const renameModeBoardIdKey = React.useMemo(
+    () => renameModeStorageKey(user?.uid),
+    [user?.uid],
+  );
 
   const renameModeBoardIdGlobalKey = "curiosity:renameModeBoardId";
 
@@ -156,25 +164,7 @@ export default function MyBoardsSidebar({
     const unsub = onSnapshot(
       q,
       async (snap) => {
-        const list = snap.docs.map((d) => {
-          const data: unknown = d.data();
-          const maybe = (data && typeof data === "object" ? data : {}) as {
-            title?: unknown;
-            createdAt?: unknown;
-            updatedAt?: unknown;
-            items?: unknown;
-          };
-          const items = Array.isArray(maybe.items) ? maybe.items : [];
-          return {
-            id: d.id,
-            title: typeof maybe.title === "string" ? maybe.title : "",
-            createdAt:
-              typeof maybe.createdAt === "number" ? maybe.createdAt : 0,
-            updatedAt:
-              typeof maybe.updatedAt === "number" ? maybe.updatedAt : 0,
-            count: items.length,
-          };
-        });
+        const list = snap.docs.map(snapshotToBoardSummary);
 
         setBoards(list);
         setLoading(false);
@@ -183,7 +173,7 @@ export default function MyBoardsSidebar({
         // auto-create a default board and navigate to it.
         if (list.length === 0 && !ensuredBoardRef.current) {
           ensuredBoardRef.current = true;
-          const id = makeId();
+          const id = makeBoardId();
           const now = Date.now();
           try {
             await setDoc(doc(database, "users", user.uid, "boards", id), {
@@ -238,6 +228,35 @@ export default function MyBoardsSidebar({
     };
   }, []);
 
+  const commitRename = React.useCallback(
+    async (id: string) => {
+      /**
+       * Commits the current inline rename text (`tempTitle`) to Firestore.
+       *
+       * This does an optimistic local update first so the UI feels instant.
+       */
+      const t = (tempTitle || "").trim();
+      setRenamingId(null);
+      if (!t) return; // ignore empty
+      try {
+        // Optimistic update
+        setBoards((prev) =>
+          prev.map((x) => (x.id === id ? { ...x, title: t } : x)),
+        );
+        if (user) {
+          await updateDoc(doc(database, "users", user.uid, "boards", id), {
+            title: t,
+            updatedAt: Date.now(),
+          });
+        }
+      } catch (e) {
+        console.error("[Boards] rename failed", e);
+        alert("Failed to rename board. Please try again.");
+      }
+    },
+    [tempTitle, user],
+  );
+
   // While renaming, commit when clicking anywhere outside the input.
   // This avoids relying on onBlur, which can fire immediately due to focus stealing.
   React.useEffect(() => {
@@ -255,7 +274,7 @@ export default function MyBoardsSidebar({
     document.addEventListener("pointerdown", onPointerDown, true);
     return () =>
       document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [renamingId]);
+  }, [renamingId, commitRename]);
 
   // Close menus on outside click or Escape
   React.useEffect(() => {
@@ -276,6 +295,12 @@ export default function MyBoardsSidebar({
   }, []);
 
   async function onDeleteBoard(id: string) {
+    /**
+     * Deletes a board.
+     *
+     * If the user deletes their last remaining board while currently viewing it,
+     * we delete+create a replacement board in a single batch to avoid races.
+     */
     try {
       if (
         !window.confirm(
@@ -291,7 +316,7 @@ export default function MyBoardsSidebar({
         // If deleting the last board while signed in, delete + create in a single batch
         // to avoid races where a replacement board is created but the old one remains.
         if (currentBoardId === id && remaining.length === 0) {
-          const newId = makeId();
+          const newId = makeBoardId();
           const now = Date.now();
           const batch = writeBatch(database);
           batch.delete(doc(database, "users", user.uid, "boards", id));
@@ -330,6 +355,12 @@ export default function MyBoardsSidebar({
   }
 
   function startRename(b: BoardSummary) {
+    /**
+     * Enters inline rename mode for a board.
+     *
+     * This writes localStorage keys used by the Board page to suppress
+     * TLDraw autoFocus while the rename input is active.
+     */
     try {
       localStorage.setItem(renameModeBoardIdKey, String(b.id));
       localStorage.setItem(renameModeBoardIdGlobalKey, String(b.id));
@@ -341,8 +372,14 @@ export default function MyBoardsSidebar({
   }
 
   async function createBoardAndStartRename() {
+    /**
+     * Creates a new board and immediately enters rename mode.
+     *
+     * We do an optimistic insert into the local list so the user sees it
+     * immediately, then persist to Firestore and navigate.
+     */
     if (!user) return;
-    const id = makeId();
+    const id = makeBoardId();
     const now = Date.now();
     const optimistic: BoardSummary = {
       id,
@@ -380,27 +417,6 @@ export default function MyBoardsSidebar({
     }
   }
 
-  async function commitRename(id: string) {
-    const t = (tempTitle || "").trim();
-    setRenamingId(null);
-    if (!t) return; // ignore empty
-    try {
-      // Optimistic update
-      setBoards((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, title: t } : x)),
-      );
-      if (user) {
-        await updateDoc(doc(database, "users", user.uid, "boards", id), {
-          title: t,
-          updatedAt: Date.now(),
-        });
-      }
-    } catch (e) {
-      console.error("[Boards] rename failed", e);
-      alert("Failed to rename board. Please try again.");
-    }
-  }
-
   // Sidebar now renders for signed-out users as well, showing branding and a sign-in control at the bottom.
 
   if (!open) {
@@ -416,10 +432,13 @@ export default function MyBoardsSidebar({
             aria-label="Expand sidebar"
             title="Expand"
           >
-            <img
+            <Image
               src="/Asset%207.svg"
               alt="Curiosity"
+              width={28}
+              height={28}
               className="h-7 w-7 object-contain"
+              priority
             />
           </button>
           <Link
@@ -458,7 +477,7 @@ export default function MyBoardsSidebar({
                 try {
                   await googleSignIn?.();
                   router.push("/");
-                } catch (e) {}
+                } catch {}
               }}
               className="p-2 rounded-md hover:bg-neutral-50"
               aria-label="Sign in to create board"
@@ -491,9 +510,11 @@ export default function MyBoardsSidebar({
                 aria-label="Account"
                 title={user.displayName || "Account"}
               >
-                <img
+                <Image
                   src={user.photoURL || "/avatar-placeholder.png"}
                   alt={user.displayName || "User"}
+                  width={32}
+                  height={32}
                   className="h-8 w-8 rounded-full object-cover"
                 />
               </button>
@@ -565,15 +586,17 @@ export default function MyBoardsSidebar({
                 try {
                   await googleSignIn?.();
                   router.push("/");
-                } catch (e) {}
+                } catch {}
               }}
               className="p-2 rounded-md hover:bg-neutral-50"
               aria-label="Sign in with Google"
               title="Sign in with Google"
             >
-              <img
+              <Image
                 src="/Google__G__logo.svg.png"
                 alt="Google"
+                width={20}
+                height={20}
                 className="h-5 w-5"
               />
             </button>
@@ -596,10 +619,13 @@ export default function MyBoardsSidebar({
             className="flex items-center gap-2"
             aria-label="Curiosity Home"
           >
-            <img
+            <Image
               src="/textred.png"
               alt="Curiosity-edu"
+              width={180}
+              height={36}
               className="h-9 w-auto"
+              priority
             />
           </Link>
           <button
@@ -779,9 +805,11 @@ export default function MyBoardsSidebar({
               aria-haspopup="menu"
               aria-expanded={profileOpen}
             >
-              <img
+              <Image
                 src={user.photoURL || "/avatar-placeholder.png"}
                 alt={user.displayName || "User"}
+                width={28}
+                height={28}
                 className="h-7 w-7 rounded-full object-cover"
               />
               <div className="min-w-0 flex-1 text-left">
@@ -850,13 +878,15 @@ export default function MyBoardsSidebar({
               try {
                 await googleSignIn?.();
                 router.push("/");
-              } catch (e) {}
+              } catch {}
             }}
             className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium text-white bg-neutral-900 rounded-md hover:bg-neutral-800"
           >
-            <img
+            <Image
               src="/Google__G__logo.svg.png"
               alt="Google"
+              width={16}
+              height={16}
               className="h-4 w-4"
             />
             <span>Sign in with Google</span>

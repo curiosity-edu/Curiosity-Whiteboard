@@ -67,12 +67,14 @@ export async function POST(req: NextRequest) {
     boards = [newBoard, ...boards];
     try {
       await writeStore({ boards });
-    } catch (e) {
+    } catch {
       // Ignore persistence failure in serverless environments; still return the created board
-      console.error("[Boards] writeStore failed during POST, continuing without persistence:", e);
+      console.error(
+        "[Boards] writeStore failed during POST, continuing without persistence",
+      );
     }
     return NextResponse.json({ id, title: t, createdAt: now, updatedAt: now });
-  } catch (e) {
+  } catch {
     // As a last resort, return a volatile board id so the app can proceed
     const now = Date.now();
     const id = makeId();
