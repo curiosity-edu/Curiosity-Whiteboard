@@ -222,6 +222,8 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
 - Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles. The stack auto-scrolls back to the top on each new response while still allowing manual scroll to older messages. New bubbles animate in and display the detected mode next to the timestamp when available.
 - Each response includes a pre-generated TTS audio payload and a speaker icon for instant playback of the model response, including spoken math content.
+- The speech conversion now preserves a speech-ready transcript with each response.
+- Audio persists per response and can regenerate from the stored speech text if the browser object URL expires after leaving and returning to the board.
 - The response bubble list is persisted locally per-board in `localStorage`.
 - History overlay can be opened to view the entire board conversation; reads `GET /api/boards/[id]`.
 

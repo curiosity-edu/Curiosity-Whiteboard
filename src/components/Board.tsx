@@ -65,6 +65,7 @@ export default function Board({ boardId }: { boardId: string }) {
     question?: string;
     modeCategory?: string;
     audioUrl?: string;
+    speechText?: string;
   };
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
   const aiScrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -148,6 +149,8 @@ export default function Board({ boardId }: { boardId: string }) {
             ts: Number(o.ts || 0),
             question: o.question ? String(o.question) : undefined,
             modeCategory: o.modeCategory ? String(o.modeCategory) : undefined,
+            audioUrl: o.audioUrl ? String(o.audioUrl) : undefined,
+            speechText: o.speechText ? String(o.speechText) : undefined,
           };
         })
         .filter((x) => x.id && x.text);
@@ -217,6 +220,7 @@ export default function Board({ boardId }: { boardId: string }) {
       question?: string,
       modeCategory?: string,
       audioUrl?: string,
+      speechText?: string,
     ) => {
       const item: AIItem = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -224,6 +228,7 @@ export default function Board({ boardId }: { boardId: string }) {
         question,
         modeCategory,
         audioUrl,
+        speechText,
         ts: Date.now(),
       };
       setAiItems((prev) => [item, ...prev]);
@@ -241,10 +246,8 @@ export default function Board({ boardId }: { boardId: string }) {
   );
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
 
-  const prepareTextForMath = React.useCallback((text: string): string => {
-    /**
-     * Helper to prepare math content within larger expressions
-     */
+  // Helper to clean math expressions without special logging
+  const cleanMathExpression = React.useCallback((text: string): string => {
     let result = text;
     result = result.replace(
       /\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g,
@@ -262,21 +265,29 @@ export default function Board({ boardId }: { boardId: string }) {
     (text: string): string => {
       /**
        * Converts response text to speech-friendly format by:
-       * - Handling complex LaTeX expressions (fractions, superscripts, subscripts, sqrt, etc.)
+       * - Handling complex LaTeX expressions (fractions, superscripts, subscripts, sqrt, integrals, etc.)
        * - Converting mathematical symbols to readable text
-       * - Handling implicit multiplication (e.g., ax → a times x)
        * - Removing markdown and formatting
        * - Stripping excessive whitespace
        */
       let processed = text;
 
-      // Handle nested braces for complex expressions like quadratic formula
-      // Replace \frac with proper handling
+      // Handle integrals (∫, ∬, ∮, etc.)
+      processed = processed.replace(/\\oint/g, "contour integral");
+      processed = processed.replace(/\\iint/g, "double integral");
+      processed = processed.replace(/\\iiint/g, "triple integral");
+      processed = processed.replace(/\\int/g, "integral");
+
+      // Handle nabla (gradient, divergence, curl operator)
+      processed = processed.replace(/\\nabla/g, "nabla");
+
+      // Handle fractions with nested expressions
       processed = processed.replace(
         /\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g,
         (match, numerator, denominator) => {
-          const num = prepareTextForMath(numerator);
-          const denom = prepareTextForMath(denominator);
+          // Recursively clean numerator and denominator
+          const num = cleanMathExpression(numerator);
+          const denom = cleanMathExpression(denominator);
           return `${num} over ${denom}`;
         },
       );
@@ -285,7 +296,7 @@ export default function Board({ boardId }: { boardId: string }) {
       processed = processed.replace(
         /\\sqrt\s*(?:\[([^\]]+)\])?\s*\{([^}]*)\}/g,
         (match, root, content) => {
-          const innerText = prepareTextForMath(content);
+          const innerText = cleanMathExpression(content);
           return root
             ? `${root} root of ${innerText}`
             : `square root of ${innerText}`;
@@ -297,8 +308,7 @@ export default function Board({ boardId }: { boardId: string }) {
         const cleanExp = exp.trim();
         if (cleanExp === "2") return " squared ";
         if (cleanExp === "3") return " cubed ";
-        // For expressions with text, add spaces to prevent letter concatenation
-        const processedExp = prepareTextForMath(exp);
+        const processedExp = cleanMathExpression(exp);
         if (/^\d+$/.test(cleanExp)) {
           return ` to the ${cleanExp}th power `;
         }
@@ -317,16 +327,12 @@ export default function Board({ boardId }: { boardId: string }) {
       // Handle subscripts
       processed = processed.replace(
         /_\s*\{([^}]*)\}/g,
-        (match, sub) => `subscript ${prepareTextForMath(sub)}`,
+        (match, sub) => `subscript ${cleanMathExpression(sub)}`,
       );
       processed = processed.replace(
         /_(\w)/g,
         (match, char) => `subscript ${char}`,
       );
-
-      // Add spaces between consecutive lowercase letters for implicit multiplication
-      // This handles cases like "ax" → "a times x"
-      processed = processed.replace(/([a-z])([a-z])/g, "$1 times $2");
 
       // Replace Greek letters and mathematical symbols
       processed = processed.replace(/\\alpha/g, "alpha");
@@ -356,17 +362,20 @@ export default function Board({ boardId }: { boardId: string }) {
 
       return processed;
     },
-    [prepareTextForMath],
+    [cleanMathExpression],
   );
 
   const generateAudio = React.useCallback(
-    async (text: string): Promise<string | undefined> => {
+    async (
+      text: string,
+    ): Promise<{ url: string; speechText: string } | undefined> => {
       /**
-       * Generates audio for the response text and returns the audio URL.
+       * Generates audio for the response text and returns both the audio URL and the prepared speech text.
        * Returns undefined if audio generation fails.
        */
       try {
         const speechText = prepareTextForSpeech(text);
+        console.debug("[TTS] speechText:", speechText);
 
         const response = await fetch("/api/speak", {
           method: "POST",
@@ -382,7 +391,10 @@ export default function Board({ boardId }: { boardId: string }) {
         }
 
         const audioBlob = await response.blob();
-        return URL.createObjectURL(audioBlob);
+        return {
+          url: URL.createObjectURL(audioBlob),
+          speechText,
+        };
       } catch (e) {
         console.error("[Audio Generation] Error:", e);
         return undefined;
@@ -391,10 +403,14 @@ export default function Board({ boardId }: { boardId: string }) {
     [prepareTextForSpeech],
   );
 
-  async function speakResponse(id: string, audioUrl: string | undefined) {
+  async function speakResponse(
+    id: string,
+    audioUrl: string | undefined,
+    speechText: string | undefined,
+  ) {
     /**
      * Plays pre-generated audio or stops playback.
-     * Audio should be pre-generated when the response comes in.
+     * If audioUrl is missing or invalid, regenerates from speechText.
      */
     try {
       // Pause current audio if any
@@ -409,8 +425,37 @@ export default function Board({ boardId }: { boardId: string }) {
         return;
       }
 
-      if (!audioUrl) {
-        console.warn("[TTS] No audio URL available");
+      let url = audioUrl;
+
+      // If audioUrl is missing, try to regenerate from speechText
+      if (!url && speechText) {
+        console.warn("[TTS] Audio URL missing, regenerating from speechText");
+        try {
+          const response = await fetch("/api/speak", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text: speechText }),
+          });
+
+          if (response.ok) {
+            const audioBlob = await response.blob();
+            url = URL.createObjectURL(audioBlob);
+            // Update the item with the new URL
+            setAiItems((prev) =>
+              prev.map((item) =>
+                item.id === id ? { ...item, audioUrl: url } : item,
+              ),
+            );
+          }
+        } catch (e) {
+          console.error("[TTS] Failed to regenerate audio:", e);
+        }
+      }
+
+      if (!url) {
+        console.warn("[TTS] No audio URL or speech text available");
         return;
       }
 
@@ -422,7 +467,7 @@ export default function Board({ boardId }: { boardId: string }) {
       }
 
       const audio = audioRef.current;
-      audio.src = audioUrl;
+      audio.src = url;
 
       audio.onended = () => {
         setPlayingAudioId(null);
@@ -1002,9 +1047,11 @@ export default function Board({ boardId }: { boardId: string }) {
           .trim();
 
         // Generate audio for the response (asynchronously)
-        const audioUrl = await generateAudio(finalText);
+        const audioResult = await generateAudio(finalText);
+        const audioUrl = audioResult?.url;
+        const speechText = audioResult?.speechText;
 
-        addAIItem(finalText, questionForUI, modeCategory, audioUrl);
+        addAIItem(finalText, questionForUI, modeCategory, audioUrl, speechText);
 
         // Persist conversation history to Firestore for signed-in users
         if (user) {
@@ -1260,7 +1307,13 @@ export default function Board({ boardId }: { boardId: string }) {
                     </div>
                   </div>
                   <button
-                    onClick={() => void speakResponse(item.id, item.audioUrl)}
+                    onClick={() =>
+                      void speakResponse(
+                        item.id,
+                        item.audioUrl,
+                        item.speechText,
+                      )
+                    }
                     className={`absolute bottom-2 right-2 text-base p-1 rounded-md transition-colors ${
                       playingAudioId === item.id
                         ? "text-blue-600 bg-blue-50"
@@ -1272,7 +1325,10 @@ export default function Board({ boardId }: { boardId: string }) {
                     aria-label={
                       playingAudioId === item.id ? "Stop audio" : "Play audio"
                     }
-                    disabled={playingAudioId === item.id || !item.audioUrl}
+                    disabled={
+                      playingAudioId === item.id ||
+                      (!item.audioUrl && !item.speechText)
+                    }
                   >
                     <FaVolumeUp />
                   </button>
