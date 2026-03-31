@@ -20,6 +20,7 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { preprocessMath } from "@/components/board/math";
+import { FaVolumeUp } from "react-icons/fa";
 import {
   getSpeechRecognitionCtor,
   type SpeechRecognitionErrorEventLike,
@@ -63,6 +64,7 @@ export default function Board({ boardId }: { boardId: string }) {
     ts: number;
     question?: string;
     modeCategory?: string;
+    audioUrl?: string;
   };
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
   const aiScrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -210,12 +212,18 @@ export default function Board({ boardId }: { boardId: string }) {
   }, [addToCanvas]);
 
   const addAIItem = React.useCallback(
-    (text: string, question?: string, modeCategory?: string) => {
+    (
+      text: string,
+      question?: string,
+      modeCategory?: string,
+      audioUrl?: string,
+    ) => {
       const item: AIItem = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         text,
         question,
         modeCategory,
+        audioUrl,
         ts: Date.now(),
       };
       setAiItems((prev) => [item, ...prev]);
@@ -226,6 +234,220 @@ export default function Board({ boardId }: { boardId: string }) {
   function removeAIItem(id: string) {
     setAiItems((prev) => prev.filter((x) => x.id !== id));
   }
+
+  // Text-to-speech state and utilities
+  const [playingAudioId, setPlayingAudioId] = React.useState<string | null>(
+    null,
+  );
+  const audioRef = React.useRef<HTMLAudioElement | null>(null);
+
+  const prepareTextForMath = React.useCallback((text: string): string => {
+    /**
+     * Helper to prepare math content within larger expressions
+     */
+    let result = text;
+    result = result.replace(
+      /\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g,
+      "$1 over $2",
+    );
+    result = result.replace(/\\sqrt\s*\{([^}]*)\}/g, "square root of $1");
+    result = result.replace(/\^\s*\{([^}]*)\}/g, "to the power of $1");
+    result = result.replace(/_\s*(\{[^}]*\}|\w)/g, "subscript $1");
+    result = result.replace(/[{}$|]/g, " ");
+    result = result.replace(/\s+/g, " ").trim();
+    return result;
+  }, []);
+
+  const prepareTextForSpeech = React.useCallback(
+    (text: string): string => {
+      /**
+       * Converts response text to speech-friendly format by:
+       * - Handling complex LaTeX expressions (fractions, superscripts, subscripts, sqrt, etc.)
+       * - Converting mathematical symbols to readable text
+       * - Handling implicit multiplication (e.g., ax → a times x)
+       * - Removing markdown and formatting
+       * - Stripping excessive whitespace
+       */
+      let processed = text;
+
+      // Handle nested braces for complex expressions like quadratic formula
+      // Replace \frac with proper handling
+      processed = processed.replace(
+        /\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g,
+        (match, numerator, denominator) => {
+          const num = prepareTextForMath(numerator);
+          const denom = prepareTextForMath(denominator);
+          return `${num} over ${denom}`;
+        },
+      );
+
+      // Handle square root
+      processed = processed.replace(
+        /\\sqrt\s*(?:\[([^\]]+)\])?\s*\{([^}]*)\}/g,
+        (match, root, content) => {
+          const innerText = prepareTextForMath(content);
+          return root
+            ? `${root} root of ${innerText}`
+            : `square root of ${innerText}`;
+        },
+      );
+
+      // Handle superscripts - special cases for small integers
+      processed = processed.replace(/\^\s*\{([^}]*)\}/g, (match, exp) => {
+        const cleanExp = exp.trim();
+        if (cleanExp === "2") return " squared ";
+        if (cleanExp === "3") return " cubed ";
+        // For expressions with text, add spaces to prevent letter concatenation
+        const processedExp = prepareTextForMath(exp);
+        if (/^\d+$/.test(cleanExp)) {
+          return ` to the ${cleanExp}th power `;
+        }
+        return ` to the power of ${processedExp} `;
+      });
+      processed = processed.replace(/\^([\d])/g, (match, char) => {
+        if (char === "2") return " squared ";
+        if (char === "3") return " cubed ";
+        return ` to the ${char}th power `;
+      });
+      processed = processed.replace(
+        /\^([a-zA-Z])/g,
+        (match, char) => ` to the power of ${char} `,
+      );
+
+      // Handle subscripts
+      processed = processed.replace(
+        /_\s*\{([^}]*)\}/g,
+        (match, sub) => `subscript ${prepareTextForMath(sub)}`,
+      );
+      processed = processed.replace(
+        /_(\w)/g,
+        (match, char) => `subscript ${char}`,
+      );
+
+      // Add spaces between consecutive lowercase letters for implicit multiplication
+      // This handles cases like "ax" → "a times x"
+      processed = processed.replace(/([a-z])([a-z])/g, "$1 times $2");
+
+      // Replace Greek letters and mathematical symbols
+      processed = processed.replace(/\\alpha/g, "alpha");
+      processed = processed.replace(/\\beta/g, "beta");
+      processed = processed.replace(/\\gamma/g, "gamma");
+      processed = processed.replace(/\\delta/g, "delta");
+      processed = processed.replace(/\\pi/g, "pi");
+      processed = processed.replace(/\\theta/g, "theta");
+      processed = processed.replace(/\\lambda/g, "lambda");
+      processed = processed.replace(/\\infty/g, "infinity");
+      processed = processed.replace(/\\pm/g, "plus or minus");
+      processed = processed.replace(/\\mp/g, "minus or plus");
+      processed = processed.replace(/\\times/g, "times");
+      processed = processed.replace(/\\div/g, "divided by");
+      processed = processed.replace(/\\geq/g, "greater than or equal to");
+      processed = processed.replace(/\\leq/g, "less than or equal to");
+      processed = processed.replace(/\\neq/g, "not equal to");
+      processed = processed.replace(/\\approx/g, "approximately");
+
+      // Remove remaining LaTeX commands and special chars
+      processed = processed.replace(/\\[a-zA-Z]+/g, " ");
+      processed = processed.replace(/[{}$`|]/g, " ");
+      processed = processed.replace(/[*~]/g, "");
+
+      // Clean up extra whitespace
+      processed = processed.replace(/\s+/g, " ").trim();
+
+      return processed;
+    },
+    [prepareTextForMath],
+  );
+
+  const generateAudio = React.useCallback(
+    async (text: string): Promise<string | undefined> => {
+      /**
+       * Generates audio for the response text and returns the audio URL.
+       * Returns undefined if audio generation fails.
+       */
+      try {
+        const speechText = prepareTextForSpeech(text);
+
+        const response = await fetch("/api/speak", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ text: speechText }),
+        });
+
+        if (!response.ok) {
+          console.warn("[Audio Generation] API error:", response.status);
+          return undefined;
+        }
+
+        const audioBlob = await response.blob();
+        return URL.createObjectURL(audioBlob);
+      } catch (e) {
+        console.error("[Audio Generation] Error:", e);
+        return undefined;
+      }
+    },
+    [prepareTextForSpeech],
+  );
+
+  async function speakResponse(id: string, audioUrl: string | undefined) {
+    /**
+     * Plays pre-generated audio or stops playback.
+     * Audio should be pre-generated when the response comes in.
+     */
+    try {
+      // Pause current audio if any
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+
+      if (playingAudioId === id) {
+        // Toggle off if already playing this item
+        setPlayingAudioId(null);
+        return;
+      }
+
+      if (!audioUrl) {
+        console.warn("[TTS] No audio URL available");
+        return;
+      }
+
+      setPlayingAudioId(id);
+
+      // Create and play audio
+      if (!audioRef.current) {
+        audioRef.current = new Audio();
+      }
+
+      const audio = audioRef.current;
+      audio.src = audioUrl;
+
+      audio.onended = () => {
+        setPlayingAudioId(null);
+      };
+
+      audio.onerror = () => {
+        console.error("[TTS] Audio playback error:", audio.error);
+        setPlayingAudioId(null);
+      };
+
+      void audio.play();
+    } catch (e) {
+      console.error("[TTS] Playback Error:", e);
+      setPlayingAudioId(null);
+    }
+  }
+
+  React.useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      }
+    };
+  }, []);
 
   React.useEffect(() => {
     const el = aiScrollRef.current;
@@ -778,7 +1000,11 @@ export default function Board({ boardId }: { boardId: string }) {
         const modeCategory = (raw?.modeCategory ?? raw?.mode_category ?? "")
           .toString()
           .trim();
-        addAIItem(finalText, questionForUI, modeCategory);
+
+        // Generate audio for the response (asynchronously)
+        const audioUrl = await generateAudio(finalText);
+
+        addAIItem(finalText, questionForUI, modeCategory, audioUrl);
 
         // Persist conversation history to Firestore for signed-in users
         if (user) {
@@ -846,7 +1072,7 @@ export default function Board({ boardId }: { boardId: string }) {
         setLoading(false);
       }
     },
-    [addToCanvas, boardItems, user, addAIItem, boardId],
+    [addToCanvas, boardItems, user, addAIItem, boardId, generateAudio],
   );
 
   // Voice input: start/stop recognition
@@ -1033,6 +1259,23 @@ export default function Board({ boardId }: { boardId: string }) {
                       {renderMessage(item.text)}
                     </div>
                   </div>
+                  <button
+                    onClick={() => void speakResponse(item.id, item.audioUrl)}
+                    className={`absolute bottom-2 right-2 text-base p-1 rounded-md transition-colors ${
+                      playingAudioId === item.id
+                        ? "text-blue-600 bg-blue-50"
+                        : "text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100"
+                    }`}
+                    title={
+                      playingAudioId === item.id ? "Stop audio" : "Play audio"
+                    }
+                    aria-label={
+                      playingAudioId === item.id ? "Stop audio" : "Play audio"
+                    }
+                    disabled={playingAudioId === item.id || !item.audioUrl}
+                  >
+                    <FaVolumeUp />
+                  </button>
                   <button
                     onClick={() => addResponseToCanvas(item.text)}
                     className="absolute top-2 right-8 text-neutral-400 hover:text-neutral-700"

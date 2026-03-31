@@ -760,6 +760,12 @@ export default function MyBoardsSidebar({
                           );
                         } catch {}
                         setMenuOpenId(null);
+                        // Dispatch event for immediate history opening if already on this board
+                        try {
+                          window.dispatchEvent(
+                            new Event("curiosity:openHistory"),
+                          );
+                        } catch {}
                         router.push(`/board/${b.id}`);
                       }}
                       role="menuitem"
