@@ -13,9 +13,20 @@ const nextConfig = {
     // your project has type errors.
     // ignoreBuildErrors: true, // Only if you also have type errors
   },
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "**.googleusercontent.com",
+      },
+      {
+        protocol: "https",
+        hostname: "**.googleapis.com",
+      },
+    ],
+  },
   // Pin tracing root to this project directory to avoid monorepo/root mis-detection
   outputFileTracingRoot: path.resolve(__dirname),
 } as NextConfig;
-
 
 export default nextConfig;

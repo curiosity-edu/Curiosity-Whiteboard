@@ -23,8 +23,8 @@ export default function AuthControls() {
       await googleSignIn?.();
       // After successful login, go to root; it will create a new board and redirect
       if (pathname !== "/") router.push("/");
-    } catch (e) {
-      console.error("Sign-in failed", e);
+    } catch {
+      // Sign-in failed
     }
   }
 
@@ -34,8 +34,8 @@ export default function AuthControls() {
       // After sign-out, go to root; it will redirect to a fresh local board
       if (pathname !== "/") router.push("/");
       else router.refresh();
-    } catch (e) {
-      console.error("Sign-out failed", e);
+    } catch {
+      // Sign-out failed
     }
   }
 

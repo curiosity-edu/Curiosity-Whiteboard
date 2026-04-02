@@ -77,7 +77,8 @@ export function preprocessMath(text: string): string {
         typeof idx === "number" && idx + m.length < sFull.length
           ? sFull.slice(idx + m.length, idx + m.length + 1)
           : "";
-      const isInlineContext = (before && before !== "\n") || (after && after !== "\n");
+      const isInlineContext =
+        (before && before !== "\n") || (after && after !== "\n");
 
       const hasStrongMathSignal =
         /\\(frac|sqrt|sum|int|oint|iint|iiint|nabla|partial|cdot|times|mathbf|left|right)\b/.test(
@@ -86,7 +87,11 @@ export function preprocessMath(text: string): string {
 
       // If $$...$$ is used inline within a sentence, treat it as inline math.
       // Otherwise remark-math parsing is brittle and we risk mangling it.
-      if (isInlineContext && !noNested.includes("\n") && noNested.length < 240) {
+      if (
+        isInlineContext &&
+        !noNested.includes("\n") &&
+        noNested.length < 240
+      ) {
         return `$${noNested}$`;
       }
 
@@ -95,7 +100,9 @@ export function preprocessMath(text: string): string {
       if (!hasStrongMathSignal && looksLikeProse(noNested)) {
         // Try to extract a leading equation-like chunk, stopping before common prose linkers.
         // Example: "a+b^2 = a^2 + b^2 is that it doesn't..." -> "$a+b^2 = a^2 + b^2$ is that it doesn't..."
-        const linkerMatch = noNested.match(/\b(is|are|was|were|that|which|because|since)\b/i);
+        const linkerMatch = noNested.match(
+          /\b(is|are|was|were|that|which|because|since)\b/i,
+        );
         const cutIdx = linkerMatch?.index;
         if (typeof cutIdx === "number" && cutIdx > 0) {
           const left = noNested.slice(0, cutIdx).trim();
@@ -209,9 +216,7 @@ export function preprocessMath(text: string): string {
   s = normalizeDollarDelimiters(s);
 
   if (DEBUG_MATH) {
-    try {
-      console.log("[math][debug] preprocessMath output:", s);
-    } catch {}
+    // Debug logging disabled in production
   }
 
   return s;

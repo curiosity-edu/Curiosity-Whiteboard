@@ -16,7 +16,10 @@ type Board = {
   items: HistoryItem[];
   doc?: unknown;
 };
-type StoreShape = { boards: Board[] } | { sessions: Board[] } | Record<string, unknown>;
+type StoreShape =
+  | { boards: Board[] }
+  | { sessions: Board[] }
+  | Record<string, unknown>;
 
 async function ensureDir() {
   await fs.mkdir(path.dirname(STORE_FILE), { recursive: true });
@@ -38,7 +41,10 @@ async function writeStore(data: StoreShape) {
 }
 
 function toBoards(shape: StoreShape): Board[] {
-  const obj = shape && typeof shape === "object" ? (shape as Record<string, unknown>) : {};
+  const obj =
+    shape && typeof shape === "object"
+      ? (shape as Record<string, unknown>)
+      : {};
   const boards = obj.boards;
   if (Array.isArray(boards)) return boards as Board[];
   const sessions = obj.sessions;
@@ -46,7 +52,10 @@ function toBoards(shape: StoreShape): Board[] {
   return [];
 }
 
-export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> },
+) {
   const { id } = await context.params;
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
   const shape = await readStore();
@@ -56,7 +65,10 @@ export async function GET(_req: NextRequest, context: { params: Promise<{ id: st
   return NextResponse.json({ doc: b.doc ?? null, updatedAt: b.updatedAt });
 }
 
-export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function PUT(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> },
+) {
   const { id } = await context.params;
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
   let body: unknown = {};
@@ -66,7 +78,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   if (!Object.prototype.hasOwnProperty.call(body, "doc")) {
     return NextResponse.json({ error: "Missing doc" }, { status: 400 });
   }
-  const obj = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const obj =
+    body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const shape = await readStore();
   const boards = toBoards(shape);
   const idx = boards.findIndex((b) => b.id === id);
@@ -75,7 +88,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   let updated: Board;
   if (idx === -1) {
     // Upsert a new board if it doesn't exist yet
-    updated = { id, title: "Untitled", createdAt: now, updatedAt: now, items: [], doc: obj.doc };
+    updated = {
+      id,
+      title: "Untitled",
+      createdAt: now,
+      updatedAt: now,
+      items: [],
+      doc: obj.doc,
+    };
     nextBoards = [updated, ...nextBoards];
   } else {
     updated = { ...boards[idx], doc: obj.doc, updatedAt: now };
@@ -83,8 +103,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   }
   try {
     await writeStore({ boards: nextBoards });
-  } catch (e) {
-    console.error("[Boards] writeStore failed during PUT /doc:", e);
+  } catch {
+    // Failed to write store during PUT, continuing without persistence
   }
   return NextResponse.json({ ok: true, updatedAt: updated.updatedAt });
 }

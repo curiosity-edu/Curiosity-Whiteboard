@@ -16,17 +16,18 @@ import MyBoardsSidebar from "@/components/MyBoardsSidebar";
 import { UserAuth } from "@/context/AuthContext";
 import { database } from "@/lib/firebase";
 import { doc as fsDoc, getDoc, setDoc, updateDoc } from "firebase/firestore";
-import ReactMarkdown from "react-markdown";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import { preprocessMath } from "@/components/board/math";
 import { FaVolumeUp } from "react-icons/fa";
 import {
   getSpeechRecognitionCtor,
-  type SpeechRecognitionErrorEventLike,
   type SpeechRecognitionEventLike,
   type SpeechRecognitionLike,
 } from "@/components/board/speechRecognition";
+import {
+  generateAudio,
+  renderMessage as renderMessageUtil,
+  getUnionBounds,
+} from "@/components/boardUtils";
 
 /**
  * Interactive board page.
@@ -64,7 +65,7 @@ export default function Board({ boardId }: { boardId: string }) {
     ts: number;
     question?: string;
     modeCategory?: string;
-    audioUrl?: string;
+    responseAudio?: string;
     speechText?: string;
   };
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
@@ -149,7 +150,11 @@ export default function Board({ boardId }: { boardId: string }) {
             ts: Number(o.ts || 0),
             question: o.question ? String(o.question) : undefined,
             modeCategory: o.modeCategory ? String(o.modeCategory) : undefined,
-            audioUrl: o.audioUrl ? String(o.audioUrl) : undefined,
+            // Restore responseAudio from storage - persistent Cloud Storage URLs!
+            // These persist across page refreshes and can be played immediately.
+            responseAudio: o.responseAudio
+              ? String(o.responseAudio)
+              : undefined,
             speechText: o.speechText ? String(o.speechText) : undefined,
           };
         })
@@ -219,7 +224,7 @@ export default function Board({ boardId }: { boardId: string }) {
       text: string,
       question?: string,
       modeCategory?: string,
-      audioUrl?: string,
+      responseAudio?: string,
       speechText?: string,
     ) => {
       const item: AIItem = {
@@ -227,7 +232,7 @@ export default function Board({ boardId }: { boardId: string }) {
         text,
         question,
         modeCategory,
-        audioUrl,
+        responseAudio,
         speechText,
         ts: Date.now(),
       };
@@ -247,170 +252,15 @@ export default function Board({ boardId }: { boardId: string }) {
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
 
   // Helper to clean math expressions without special logging
-  const cleanMathExpression = React.useCallback((text: string): string => {
-    let result = text;
-    result = result.replace(
-      /\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g,
-      "$1 over $2",
-    );
-    result = result.replace(/\\sqrt\s*\{([^}]*)\}/g, "square root of $1");
-    result = result.replace(/\^\s*\{([^}]*)\}/g, "to the power of $1");
-    result = result.replace(/_\s*(\{[^}]*\}|\w)/g, "subscript $1");
-    result = result.replace(/[{}$|]/g, " ");
-    result = result.replace(/\s+/g, " ").trim();
-    return result;
-  }, []);
-
-  const prepareTextForSpeech = React.useCallback(
-    (text: string): string => {
-      /**
-       * Converts response text to speech-friendly format by:
-       * - Handling complex LaTeX expressions (fractions, superscripts, subscripts, sqrt, integrals, etc.)
-       * - Converting mathematical symbols to readable text
-       * - Removing markdown and formatting
-       * - Stripping excessive whitespace
-       */
-      let processed = text;
-
-      // Handle integrals (∫, ∬, ∮, etc.)
-      processed = processed.replace(/\\oint/g, "contour integral");
-      processed = processed.replace(/\\iint/g, "double integral");
-      processed = processed.replace(/\\iiint/g, "triple integral");
-      processed = processed.replace(/\\int/g, "integral");
-
-      // Handle nabla (gradient, divergence, curl operator)
-      processed = processed.replace(/\\nabla/g, "nabla");
-
-      // Handle fractions with nested expressions
-      processed = processed.replace(
-        /\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g,
-        (match, numerator, denominator) => {
-          // Recursively clean numerator and denominator
-          const num = cleanMathExpression(numerator);
-          const denom = cleanMathExpression(denominator);
-          return `${num} over ${denom}`;
-        },
-      );
-
-      // Handle square root
-      processed = processed.replace(
-        /\\sqrt\s*(?:\[([^\]]+)\])?\s*\{([^}]*)\}/g,
-        (match, root, content) => {
-          const innerText = cleanMathExpression(content);
-          return root
-            ? `${root} root of ${innerText}`
-            : `square root of ${innerText}`;
-        },
-      );
-
-      // Handle superscripts - special cases for small integers
-      processed = processed.replace(/\^\s*\{([^}]*)\}/g, (match, exp) => {
-        const cleanExp = exp.trim();
-        if (cleanExp === "2") return " squared ";
-        if (cleanExp === "3") return " cubed ";
-        const processedExp = cleanMathExpression(exp);
-        if (/^\d+$/.test(cleanExp)) {
-          return ` to the ${cleanExp}th power `;
-        }
-        return ` to the power of ${processedExp} `;
-      });
-      processed = processed.replace(/\^([\d])/g, (match, char) => {
-        if (char === "2") return " squared ";
-        if (char === "3") return " cubed ";
-        return ` to the ${char}th power `;
-      });
-      processed = processed.replace(
-        /\^([a-zA-Z])/g,
-        (match, char) => ` to the power of ${char} `,
-      );
-
-      // Handle subscripts
-      processed = processed.replace(
-        /_\s*\{([^}]*)\}/g,
-        (match, sub) => `subscript ${cleanMathExpression(sub)}`,
-      );
-      processed = processed.replace(
-        /_(\w)/g,
-        (match, char) => `subscript ${char}`,
-      );
-
-      // Replace Greek letters and mathematical symbols
-      processed = processed.replace(/\\alpha/g, "alpha");
-      processed = processed.replace(/\\beta/g, "beta");
-      processed = processed.replace(/\\gamma/g, "gamma");
-      processed = processed.replace(/\\delta/g, "delta");
-      processed = processed.replace(/\\pi/g, "pi");
-      processed = processed.replace(/\\theta/g, "theta");
-      processed = processed.replace(/\\lambda/g, "lambda");
-      processed = processed.replace(/\\infty/g, "infinity");
-      processed = processed.replace(/\\pm/g, "plus or minus");
-      processed = processed.replace(/\\mp/g, "minus or plus");
-      processed = processed.replace(/\\times/g, "times");
-      processed = processed.replace(/\\div/g, "divided by");
-      processed = processed.replace(/\\geq/g, "greater than or equal to");
-      processed = processed.replace(/\\leq/g, "less than or equal to");
-      processed = processed.replace(/\\neq/g, "not equal to");
-      processed = processed.replace(/\\approx/g, "approximately");
-
-      // Remove remaining LaTeX commands and special chars
-      processed = processed.replace(/\\[a-zA-Z]+/g, " ");
-      processed = processed.replace(/[{}$`|]/g, " ");
-      processed = processed.replace(/[*~]/g, "");
-
-      // Clean up extra whitespace
-      processed = processed.replace(/\s+/g, " ").trim();
-
-      return processed;
-    },
-    [cleanMathExpression],
-  );
-
-  const generateAudio = React.useCallback(
-    async (
-      text: string,
-    ): Promise<{ url: string; speechText: string } | undefined> => {
-      /**
-       * Generates audio for the response text and returns both the audio URL and the prepared speech text.
-       * Returns undefined if audio generation fails.
-       */
-      try {
-        const speechText = prepareTextForSpeech(text);
-        console.debug("[TTS] speechText:", speechText);
-
-        const response = await fetch("/api/speak", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ text: speechText }),
-        });
-
-        if (!response.ok) {
-          console.warn("[Audio Generation] API error:", response.status);
-          return undefined;
-        }
-
-        const audioBlob = await response.blob();
-        return {
-          url: URL.createObjectURL(audioBlob),
-          speechText,
-        };
-      } catch (e) {
-        console.error("[Audio Generation] Error:", e);
-        return undefined;
-      }
-    },
-    [prepareTextForSpeech],
-  );
 
   async function speakResponse(
     id: string,
-    audioUrl: string | undefined,
+    responseAudio: string | undefined,
     speechText: string | undefined,
   ) {
     /**
      * Plays pre-generated audio or stops playback.
-     * If audioUrl is missing or invalid, regenerates from speechText.
+     * If responseAudio is missing or invalid, regenerates from speechText.
      */
     try {
       // Pause current audio if any
@@ -425,32 +275,26 @@ export default function Board({ boardId }: { boardId: string }) {
         return;
       }
 
-      let url = audioUrl;
+      let url = responseAudio;
 
-      // If audioUrl is missing, try to regenerate from speechText
+      // If responseAudio is missing, try to regenerate from speechText
       if (!url && speechText) {
+        // Fallback: regenerate audio if URL is missing but speechText exists
+        // This shouldn't normally happen since audio is generated upfront, but kept for safety
         console.warn("[TTS] Audio URL missing, regenerating from speechText");
         try {
-          const response = await fetch("/api/speak", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ text: speechText }),
-          });
-
-          if (response.ok) {
-            const audioBlob = await response.blob();
-            url = URL.createObjectURL(audioBlob);
-            // Update the item with the new URL
+          const audioResult = await generateAudio(speechText);
+          if (audioResult) {
+            url = audioResult.responseAudio;
+            // Update the item with the new URL (now persistent Cloud Storage URL)
             setAiItems((prev) =>
               prev.map((item) =>
-                item.id === id ? { ...item, audioUrl: url } : item,
+                item.id === id ? { ...item, responseAudio: url } : item,
               ),
             );
           }
-        } catch (e) {
-          console.error("[TTS] Failed to regenerate audio:", e);
+        } catch {
+          // Ignore regeneration errors
         }
       }
 
@@ -459,6 +303,7 @@ export default function Board({ boardId }: { boardId: string }) {
         return;
       }
 
+      // Attempt to play the audio
       setPlayingAudioId(id);
 
       // Create and play audio
@@ -474,13 +319,12 @@ export default function Board({ boardId }: { boardId: string }) {
       };
 
       audio.onerror = () => {
-        console.error("[TTS] Audio playback error:", audio.error);
         setPlayingAudioId(null);
       };
 
       void audio.play();
-    } catch (e) {
-      console.error("[TTS] Playback Error:", e);
+    } catch  {
+      // [TTS] Playback Error
       setPlayingAudioId(null);
     }
   }
@@ -502,47 +346,7 @@ export default function Board({ boardId }: { boardId: string }) {
   }, [aiItems.length]);
 
   function renderMessage(text: string) {
-    /**
-     * Renders an AI message as markdown + KaTeX.
-     *
-     * We run the text through `preprocessMath` to normalize delimiters so
-     * `remark-math` can reliably parse the content.
-     */
-    const raw = (text || "").toString();
-    let debug = false;
-    try {
-      debug = localStorage.getItem("curiosity:debugMath") === "1";
-    } catch {}
-    if (debug) {
-      try {
-        console.log("[math][debug] raw message:", raw);
-      } catch {}
-    }
-    const v = preprocessMath(raw);
-    if (debug) {
-      try {
-        console.log("[math][debug] rendered markdown source:", v);
-        console.log(
-          "[math][debug] tip: set localStorage curiosity:debugMath=0 to disable",
-        );
-      } catch {}
-    }
-    return (
-      <ReactMarkdown
-        remarkPlugins={[remarkMath]}
-        rehypePlugins={[rehypeKatex]}
-        components={{
-          p: (props) => (
-            <p className="whitespace-pre-wrap leading-6">{props.children}</p>
-          ),
-          strong: (props) => (
-            <strong className="font-semibold">{props.children}</strong>
-          ),
-        }}
-      >
-        {v}
-      </ReactMarkdown>
-    );
+    return renderMessageUtil(text, preprocessMath);
   }
 
   const openHistory = React.useCallback(async () => {
@@ -571,8 +375,8 @@ export default function Board({ boardId }: { boardId: string }) {
       }
       items.sort((a, b) => (a.ts || 0) - (b.ts || 0));
       setArchive(items);
-    } catch (e) {
-      console.error("[History] Failed to load board:", e);
+    } catch {
+      // Failed to load board items
       setArchive([]);
     } finally {
       setHistoryOpen(true);
@@ -637,8 +441,8 @@ export default function Board({ boardId }: { boardId: string }) {
       suppressCanvasTextRef.current = false;
       const rec = recognitionRef.current;
       if (rec && typeof rec.stop === "function") rec.stop();
-    } catch (e) {
-      console.error("[Voice] stop failed:", e);
+    } catch {
+      // Voice input not supported
     } finally {
       setIsRecording(false);
     }
@@ -681,7 +485,6 @@ export default function Board({ boardId }: { boardId: string }) {
       const maybe = editor as unknown as { setReadOnly?: (v: boolean) => void };
       if (typeof maybe.setReadOnly === "function") maybe.setReadOnly(false);
     } catch {}
-    console.log("[Board] Editor mounted:", editor);
     // Force downstream effects (like Firestore snapshot load) to run against
     // the *current* editor instance.
     setEditorReady(false);
@@ -743,17 +546,15 @@ export default function Board({ boardId }: { boardId: string }) {
           try {
             const store = (editor as unknown as { store: unknown }).store;
             loadSnapshot(store as never, obj.doc);
-            console.log("[Board] Loaded snapshot for", boardId);
             try {
               const k = `boardLocalUpdatedAt:${user.uid}:${boardId}`;
               localStorage.setItem(k, String(remoteUpdatedAt || Date.now()));
             } catch {}
-          } catch (e) {
-            console.warn("[Board] Failed to load snapshot:", e);
+          } catch {
           }
         }
-      } catch (e) {
-        console.warn("[Board] load doc failed:", e);
+      } catch {
+        // Failed to load document from storage
       } finally {
         isLoadingDocRef.current = false;
         if (!cancelled) setEditorReady(true);
@@ -804,9 +605,8 @@ export default function Board({ boardId }: { boardId: string }) {
             { merge: true },
           );
         }
-        console.log("[Board] autosave ok", boardId);
-      } catch (e) {
-        console.warn("[Board] autosave failed:", e);
+      } catch  {
+        // [Board] autosave failed
       }
     };
 
@@ -900,51 +700,8 @@ export default function Board({ boardId }: { boardId: string }) {
   /**
    * Calculates the bounding box that contains all specified shapes
    */
-  function getUnionBounds(editor: Editor, ids: TLShapeId[]) {
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-
-    for (const id of ids) {
-      const b = editor.getShapePageBounds?.(id) ?? null;
-      if (!b) continue;
-
-      const x = b.x ?? b.minX ?? 0;
-      const y = b.y ?? b.minY ?? 0;
-      const w =
-        b.w ??
-        b.width ??
-        (b.maxX != null && b.minX != null ? b.maxX - b.minX : 0);
-      const h =
-        b.h ??
-        b.height ??
-        (b.maxY != null && b.minY != null ? b.maxY - b.minY : 0);
-
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x + w > maxX) maxX = x + w;
-      if (y + h > maxY) maxY = y + h;
-    }
-
-    if (
-      !isFinite(minX) ||
-      !isFinite(minY) ||
-      !isFinite(maxX) ||
-      !isFinite(maxY)
-    )
-      return null;
-
-    return {
-      minX,
-      minY,
-      maxX,
-      maxY,
-      w: maxX - minX,
-      h: maxY - minY,
-      cx: (minX + maxX) / 2,
-      cy: (minY + maxY) / 2,
-    };
+  function getBounds(editor: Editor, ids: TLShapeId[]) {
+    return getUnionBounds(editor, ids);
   }
 
   /**
@@ -1026,7 +783,6 @@ export default function Board({ boardId }: { boardId: string }) {
 
         // Process the API response
         const raw = await res.json();
-        console.log("[/api/solve] payload:", raw);
 
         // Format the response text
         let finalText = (raw?.message ?? "").toString().trim();
@@ -1046,12 +802,29 @@ export default function Board({ boardId }: { boardId: string }) {
           .toString()
           .trim();
 
-        // Generate audio for the response (asynchronously)
-        const audioResult = await generateAudio(finalText);
-        const audioUrl = audioResult?.url;
-        const speechText = audioResult?.speechText;
+        // Generate audio for the response (with error handling)
+        let responseAudio: string | undefined;
+        let speechText: string | undefined;
+        try {
+          const audioResult = await generateAudio(finalText);
+          responseAudio = audioResult?.responseAudio;
+          speechText = audioResult?.speechText;
+          if (responseAudio) {
+            // Audio generated successfully
+          } else {
+            // Audio generation returned undefined
+          }
+        } catch {
+          // Continue without audio - don't let this block adding the item
+        }
 
-        addAIItem(finalText, questionForUI, modeCategory, audioUrl, speechText);
+        addAIItem(
+          finalText,
+          questionForUI,
+          modeCategory,
+          responseAudio,
+          speechText,
+        );
 
         // Persist conversation history to Firestore for signed-in users
         if (user) {
@@ -1074,8 +847,8 @@ export default function Board({ boardId }: { boardId: string }) {
               },
               { merge: true },
             );
-          } catch (e) {
-            console.warn("[Board] failed to persist items:", e);
+          } catch {
+            // Failed to persist items to Firestore
           }
         }
 
@@ -1089,7 +862,7 @@ export default function Board({ boardId }: { boardId: string }) {
         // For voice questions, never auto-add text to the canvas.
         if (!questionFromVoice && shouldAddToCanvas) {
           // Calculate position for the response text
-          const b = getUnionBounds(editor, shapeIds);
+          const b = getBounds(editor, shapeIds);
           let x: number, y: number;
           if (b) {
             // Position below the selected area
@@ -1113,13 +886,12 @@ export default function Board({ boardId }: { boardId: string }) {
           });
         }
       } catch (err) {
-        console.error("[AskAI] Error:", err);
         alert(String(err instanceof Error ? err.message : err));
       } finally {
         setLoading(false);
       }
     },
-    [addToCanvas, boardItems, user, addAIItem, boardId, generateAudio],
+    [addToCanvas, boardItems, user, addAIItem, boardId],
   );
 
   // Voice input: start/stop recognition
@@ -1158,8 +930,8 @@ export default function Board({ boardId }: { boardId: string }) {
         }
         interimRef.current = interim;
       };
-      rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
-        console.error("[Voice] error:", e);
+      rec.onerror = () => {
+        // Handle speech recognition errors silently
       };
       rec.onend = () => {
         const spoken = (finalVoiceRef.current || interimRef.current).trim();
@@ -1199,8 +971,8 @@ export default function Board({ boardId }: { boardId: string }) {
       };
       setIsRecording(true);
       rec.start();
-    } catch (e) {
-      console.error("[Voice] start failed:", e);
+    } catch {
+      // Voice input not supported in this browser
       setIsRecording(false);
     }
   }
@@ -1310,7 +1082,7 @@ export default function Board({ boardId }: { boardId: string }) {
                     onClick={() =>
                       void speakResponse(
                         item.id,
-                        item.audioUrl,
+                        item.responseAudio,
                         item.speechText,
                       )
                     }
@@ -1327,7 +1099,7 @@ export default function Board({ boardId }: { boardId: string }) {
                     }
                     disabled={
                       playingAudioId === item.id ||
-                      (!item.audioUrl && !item.speechText)
+                      (!item.responseAudio && !item.speechText)
                     }
                   >
                     <FaVolumeUp />

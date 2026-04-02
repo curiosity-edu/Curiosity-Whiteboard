@@ -9,8 +9,6 @@ export const runtime = "nodejs";
 // Specify the OpenAI model to use (GPT-4 with vision capabilities)
 const MODEL = "gpt-4o";
 
-const DEBUG_SOLVE =
-  (process.env.CURIOSITY_DEBUG_SOLVE || "").toString().trim() === "1";
 
 // Shared response format policy used in both image and voice-only flows
 const RESPONSE_FORMAT_POLICY =
@@ -36,18 +34,6 @@ async function loadModeDetectionRules(): Promise<string> {
     return "";
   }
 }
-
- function debugLog(label: string, data: unknown) {
-   if (!DEBUG_SOLVE) return;
-   try {
-     const s = typeof data === "string" ? data : JSON.stringify(data, null, 2);
-     console.log(`[solve][debug] ${label}:`, (s || "").slice(0, 6000));
-   } catch {
-     try {
-       console.log(`[solve][debug] ${label}:`, data);
-     } catch {}
-   }
- }
 
 /**
  * Helper function to create a JSON response with a specific status code
@@ -96,8 +82,9 @@ type SolveModelResponse = {
 };
 
 function readModeCategory(parsed: SolveModelResponse | null) {
-  const v =
-    (parsed?.mode_category ?? parsed?.modeCategory ?? "").toString().trim();
+  const v = (parsed?.mode_category ?? parsed?.modeCategory ?? "")
+    .toString()
+    .trim();
   return v;
 }
 
@@ -115,7 +102,8 @@ export async function POST(req: NextRequest) {
     const form = await req.formData();
     const file = form.get("image");
     const boardIdRaw = form.get("boardId") ?? form.get("sessionId"); // backward compat
-    const boardId = (typeof boardIdRaw === "string" ? boardIdRaw : undefined) || makeId();
+    const boardId =
+      (typeof boardIdRaw === "string" ? boardIdRaw : undefined) || makeId();
     const historyRaw = form.get("history");
     const questionRaw = form.get("question");
     const question = typeof questionRaw === "string" ? questionRaw.trim() : "";
@@ -151,16 +139,17 @@ export async function POST(req: NextRequest) {
               "- ALL math must be wrapped as $...$ (inline) or $$...$$ (display).\n" +
               "- For display math, put the $$ delimiters on their own lines.\n" +
               "- Do NOT present equations inside ((double parentheses)) or [square brackets]; use $$...$$ instead.\n" +
-              "Return ONLY JSON with the keys described above."
+              "Return ONLY JSON with the keys described above.",
           },
         ],
       });
 
       const raw = rsp.choices?.[0]?.message?.content?.trim() || "{}";
-      debugLog("raw_model_content_text_only", raw);
       const parsed = parseModelJson(raw) as unknown;
       const obj: SolveModelResponse | null =
-        parsed && typeof parsed === "object" ? (parsed as SolveModelResponse) : null;
+        parsed && typeof parsed === "object"
+          ? (parsed as SolveModelResponse)
+          : null;
       if (!parsed) {
         if (!raw) return json(502, { error: "Model returned no content." });
         return json(200, {
@@ -172,7 +161,6 @@ export async function POST(req: NextRequest) {
       }
 
       const messageRaw = (obj?.message ?? "").toString().trim();
-      debugLog("parsed_message_text_only", messageRaw);
       const message = sanitizeLatex(messageRaw);
       const questionText = (obj?.question_text ?? "").toString().trim();
       const answerPlain = (obj?.answer_plain ?? "").toString().trim();
@@ -193,13 +181,15 @@ export async function POST(req: NextRequest) {
 
     // If no image was provided, allow a text-only solve (voice-only flow).
     if (!(file instanceof File)) {
-      if (!question) return json(400, { error: "No 'image' file in form-data." });
+      if (!question)
+        return json(400, { error: "No 'image' file in form-data." });
       const rules = await loadModeDetectionRules();
       return await solveFromTextOnly(rules);
     }
 
     // Validate the uploaded file
-    if (!file.type.startsWith("image/")) return json(400, { error: `Invalid type: ${file.type}` });
+    if (!file.type.startsWith("image/"))
+      return json(400, { error: `Invalid type: ${file.type}` });
 
     // Read the file content
     const arr = await file.arrayBuffer();
@@ -218,7 +208,7 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: "system",
-          content: rules + RESPONSE_FORMAT_POLICY
+          content: rules + RESPONSE_FORMAT_POLICY,
         },
         {
           role: "user",
@@ -226,7 +216,8 @@ export async function POST(req: NextRequest) {
             {
               type: "text",
               text:
-                "Here is the prior history as JSON. Use it as context: " + historyString +
+                "Here is the prior history as JSON. Use it as context: " +
+                historyString +
                 (question
                   ? "\nNow answer this question (from voice): " +
                     question +
@@ -252,7 +243,9 @@ export async function POST(req: NextRequest) {
     // Parse the JSON response from the AI
     const parsed = parseModelJson(raw) as unknown;
     const obj: SolveModelResponse | null =
-      parsed && typeof parsed === "object" ? (parsed as SolveModelResponse) : null;
+      parsed && typeof parsed === "object"
+        ? (parsed as SolveModelResponse)
+        : null;
     if (!parsed) {
       if (!raw) return json(502, { error: "Model returned no content." });
       return json(200, {
@@ -265,7 +258,6 @@ export async function POST(req: NextRequest) {
 
     // Extract and clean the main message
     const messageRaw = (obj?.message ?? "").toString().trim();
-    debugLog("parsed_message_image", messageRaw);
     const message = sanitizeLatex(messageRaw);
     const questionText = (obj?.question_text ?? "").toString().trim();
     // We no longer use AI to name boards
@@ -278,31 +270,31 @@ export async function POST(req: NextRequest) {
     const modeCategory = readModeCategory(obj);
 
     // Return the structured response (include questionText and boardId for UI)
-    const looksUnreadable = /could not read|can't read|cannot read|unable to read|unreadable|meaningless scribbles|could not parse|can't parse|cannot parse|unable to parse|no (?:problem|question) found|nothing (?:to solve|to answer)|image (?:is )?(?:blank|empty|unclear)/i.test(
-      message
-    );
+    const looksUnreadable =
+      /could not read|can't read|cannot read|unable to read|unreadable|meaningless scribbles|could not parse|can't parse|cannot parse|unable to parse|no (?:problem|question) found|nothing (?:to solve|to answer)|image (?:is )?(?:blank|empty|unclear)/i.test(
+        message,
+      );
 
-    const looksEmpty =
-      !message && !answerPlain && !answerLatex && !explanation;
+    const looksEmpty = !message && !answerPlain && !answerLatex && !explanation;
 
     if (question && (looksEmpty || looksUnreadable)) {
       const rules = await loadModeDetectionRules();
       return await solveFromTextOnly(rules);
     }
 
-    return json(200, { 
-      message, 
-      answerPlain, 
-      answerLatex, 
+    return json(200, {
+      message,
+      answerPlain,
+      answerLatex,
       explanation,
       questionText: questionText || question,
       boardId,
       modeCategory,
     });
-    
   } catch (err: unknown) {
     // Handle errors that occur during processing
-    const message = err instanceof Error ? err.message : "Unknown server error.";
+    const message =
+      err instanceof Error ? err.message : "Unknown server error.";
     console.error("solve route error:", err);
     return json(500, { error: message });
   }

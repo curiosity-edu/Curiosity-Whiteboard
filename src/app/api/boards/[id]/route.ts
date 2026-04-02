@@ -16,7 +16,10 @@ type Board = {
   items: HistoryItem[];
   doc?: unknown;
 };
-type StoreShape = { boards: Board[] } | { sessions: Board[] } | Record<string, unknown>;
+type StoreShape =
+  | { boards: Board[] }
+  | { sessions: Board[] }
+  | Record<string, unknown>;
 
 async function ensureDir() {
   await fs.mkdir(path.dirname(STORE_FILE), { recursive: true });
@@ -38,7 +41,10 @@ async function writeStore(data: StoreShape) {
 }
 
 function toBoards(shape: StoreShape): Board[] {
-  const obj = shape && typeof shape === "object" ? (shape as Record<string, unknown>) : {};
+  const obj =
+    shape && typeof shape === "object"
+      ? (shape as Record<string, unknown>)
+      : {};
   const boards = obj.boards;
   if (Array.isArray(boards)) return boards as Board[];
   const sessions = obj.sessions;
@@ -46,17 +52,29 @@ function toBoards(shape: StoreShape): Board[] {
   return [];
 }
 
-export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> },
+) {
   const { id } = await context.params;
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
   const shape = await readStore();
   const boards = toBoards(shape);
   const b = boards.find((x) => x.id === id);
   if (!b) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json({ id: b.id, title: b.title, createdAt: b.createdAt, updatedAt: b.updatedAt, items: b.items ?? [] });
+  return NextResponse.json({
+    id: b.id,
+    title: b.title,
+    createdAt: b.createdAt,
+    updatedAt: b.updatedAt,
+    items: b.items ?? [],
+  });
 }
 
-export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(
+  _req: NextRequest,
+  context: { params: Promise<{ id: string }> },
+) {
   const { id } = await context.params;
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
   const shape = await readStore();
@@ -69,14 +87,18 @@ export async function DELETE(_req: NextRequest, context: { params: Promise<{ id:
   return new NextResponse(null, { status: 204 });
 }
 
-export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> },
+) {
   const { id } = await context.params;
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
   let body: unknown = {};
   try {
     body = await req.json();
   } catch {}
-  const obj = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const obj =
+    body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const t = (obj.title ?? "").toString().trim();
   if (!t) {
     return NextResponse.json({ error: "Title is required." }, { status: 400 });
@@ -84,15 +106,21 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
   const shape = await readStore();
   const boards = toBoards(shape);
   const idx = boards.findIndex((b) => b.id === id);
-  if (idx === -1) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (idx === -1)
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   const now = Date.now();
   const updated: Board = { ...boards[idx], title: t, updatedAt: now };
   const next = boards.slice();
   next[idx] = updated;
   try {
     await writeStore({ boards: next });
-  } catch (e) {
-    console.error("[Boards] writeStore failed during PATCH, continuing without persistence:", e);
+  } catch {
+    // Failed to write store during PATCH, continuing without persistence
   }
-  return NextResponse.json({ id: updated.id, title: updated.title, createdAt: updated.createdAt, updatedAt: updated.updatedAt });
+  return NextResponse.json({
+    id: updated.id,
+    title: updated.title,
+    createdAt: updated.createdAt,
+    updatedAt: updated.updatedAt,
+  });
 }

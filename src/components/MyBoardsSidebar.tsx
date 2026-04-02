@@ -12,18 +12,19 @@ import {
   pendingRenameStorageKey,
   renameModeStorageKey,
   snapshotToBoardSummary,
+  createBoard,
+  updateBoardTitle,
+  deleteBoard,
+  deleteAndCreateBoard,
   type BoardSummary,
 } from "@/components/boards/sidebarUtils";
 import {
   collection,
-  deleteDoc,
   doc,
   onSnapshot,
   orderBy,
   query,
   setDoc,
-  updateDoc,
-  writeBatch,
 } from "firebase/firestore";
 import { TbLayoutSidebarLeftCollapseFilled } from "react-icons/tb";
 import { FcAbout } from "react-icons/fc";
@@ -185,10 +186,10 @@ export default function MyBoardsSidebar({
               doc: null,
             });
             router.replace(`/board/${id}`);
-          } catch (e) {
+          } catch {
             // Allow retries if create failed
             ensuredBoardRef.current = false;
-            console.error("[Boards] failed to auto-create default board", e);
+            console.error("[Boards] failed to auto-create default board");
           }
         }
 
@@ -231,9 +232,17 @@ export default function MyBoardsSidebar({
   const commitRename = React.useCallback(
     async (id: string) => {
       /**
-       * Commits the current inline rename text (`tempTitle`) to Firestore.
+       * Commits the current inline rename text (`tempTitle`) to the board.
+       * Uses updateBoardTitle utility for the Firestore operation.
        *
-       * This does an optimistic local update first so the UI feels instant.
+       * Preconditions:
+       * - tempTitle must be set in component state
+       * - user must be signed in
+       *
+       * Side effects:
+       * - Optimistically updates UI via setBoards
+       * - Calls updateBoardTitle (Firestore operation)
+       * - On error, shows alert to user
        */
       const t = (tempTitle || "").trim();
       setRenamingId(null);
@@ -244,13 +253,10 @@ export default function MyBoardsSidebar({
           prev.map((x) => (x.id === id ? { ...x, title: t } : x)),
         );
         if (user) {
-          await updateDoc(doc(database, "users", user.uid, "boards", id), {
-            title: t,
-            updatedAt: Date.now(),
-          });
+          await updateBoardTitle(database, user.uid, id, t);
         }
-      } catch (e) {
-        console.error("[Boards] rename failed", e);
+      } catch {
+        // Failed to rename board
         alert("Failed to rename board. Please try again.");
       }
     },
@@ -296,10 +302,20 @@ export default function MyBoardsSidebar({
 
   async function onDeleteBoard(id: string) {
     /**
-     * Deletes a board.
+     * Deletes a board from Firestore.
+     * Handles special case: if deleting the last remaining board, creates a replacement
+     * in atomic batch operation to avoid races.
      *
-     * If the user deletes their last remaining board while currently viewing it,
-     * we delete+create a replacement board in a single batch to avoid races.
+     * Preconditions:
+     * - User must confirm deletion via window.confirm
+     * - For last board deletion, uses deleteAndCreateBoard Firestore helper
+     * - For normal deletion, uses deleteBoard Firestore helper
+     *
+     * Side effects:
+     * - Calls Firestore delete/batch operations
+     * - Updates setDeletingId, setMenuOpenId state
+     * - Navigates user away if deleted board is current board
+     * - Shows error alert on failure
      */
     try {
       if (
@@ -317,23 +333,12 @@ export default function MyBoardsSidebar({
         // to avoid races where a replacement board is created but the old one remains.
         if (currentBoardId === id && remaining.length === 0) {
           const newId = makeBoardId();
-          const now = Date.now();
-          const batch = writeBatch(database);
-          batch.delete(doc(database, "users", user.uid, "boards", id));
-          batch.set(doc(database, "users", user.uid, "boards", newId), {
-            id: newId,
-            title: DEFAULT_BOARD_TITLE,
-            createdAt: now,
-            updatedAt: now,
-            items: [],
-            doc: null,
-          });
-          await batch.commit();
+          await deleteAndCreateBoard(database, user.uid, id, newId);
           router.push(`/board/${newId}`);
           return;
         }
 
-        await deleteDoc(doc(database, "users", user.uid, "boards", id));
+        await deleteBoard(database, user.uid, id);
 
         // Navigate to another board if we just deleted the active one.
         if (currentBoardId === id) {
@@ -345,8 +350,8 @@ export default function MyBoardsSidebar({
         setBoards((prev) => prev.filter((b) => b.id !== id));
         if (currentBoardId === id) router.push("/");
       }
-    } catch (e) {
-      console.error("[Boards] delete failed", e);
+    } catch {
+      // Failed to delete board
       alert("Failed to delete board. Please try again.");
     } finally {
       setDeletingId(null);
@@ -374,9 +379,17 @@ export default function MyBoardsSidebar({
   async function createBoardAndStartRename() {
     /**
      * Creates a new board and immediately enters rename mode.
+     * Uses createBoard utility for the Firestore operation.
      *
-     * We do an optimistic insert into the local list so the user sees it
-     * immediately, then persist to Firestore and navigate.
+     * Preconditions:
+     * - User must be signed in
+     *
+     * Side effects:
+     * - Optimistically updates UI via setBoards
+     * - Calls createBoard (Firestore operation)
+     * - Stores board ID in localStorage for pending rename
+     * - Navigates to the new board via router.push
+     * - On error, shows alert and resets renamingId state
      */
     if (!user) return;
     const id = makeBoardId();
@@ -401,17 +414,10 @@ export default function MyBoardsSidebar({
         localStorage.setItem(renameModeBoardIdGlobalKey, id);
         window.dispatchEvent(new Event("curiosity:renameModeChanged"));
       } catch {}
-      await setDoc(doc(database, "users", user.uid, "boards", id), {
-        id,
-        title: DEFAULT_BOARD_TITLE,
-        createdAt: now,
-        updatedAt: now,
-        items: [],
-        doc: null,
-      });
+      await createBoard(database, user.uid, id, DEFAULT_BOARD_TITLE);
       router.push(`/board/${id}`);
-    } catch (e) {
-      console.error("[Boards] create failed", e);
+    } catch {
+      // Failed to create board
       alert("Failed to create board. Please try again.");
       setRenamingId(null);
     }
@@ -516,6 +522,7 @@ export default function MyBoardsSidebar({
                   width={32}
                   height={32}
                   className="h-8 w-8 rounded-full object-cover"
+                  unoptimized={true}
                 />
               </button>
               {profileOpen && (
@@ -817,6 +824,7 @@ export default function MyBoardsSidebar({
                 width={28}
                 height={28}
                 className="h-7 w-7 rounded-full object-cover"
+                unoptimized={true}
               />
               <div className="min-w-0 flex-1 text-left">
                 <div className="truncate text-sm text-neutral-900">

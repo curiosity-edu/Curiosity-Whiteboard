@@ -4,6 +4,19 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 https://curiosity-edu.org
 
+## Tech Stack
+
+- **Framework**: [Next.js 15](https://nextjs.org) with App Router
+- **Runtime**: Node.js (Edge-compatible APIs where noted)
+- **Authentication**: Firebase Auth (Google Sign-In)
+- **Database**: Firestore (signed-in persistence)
+- **Storage**: Firebase Storage (audio files)
+- **Canvas**: [TLDraw](https://tldraw.dev) for the whiteboard
+- **AI**: OpenAI GPT-4o (vision + text), TTS-1-HD for speech
+- **Math Rendering**: KaTeX via react-markdown + remark-math + rehype-katex
+- **Speech Recognition**: Web Speech API (browser-native)
+- **Styling**: Tailwind CSS 4
+
 ## Getting Started
 
 First, run the development server:
@@ -20,10 +33,6 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
@@ -32,6 +41,45 @@ To learn more about Next.js, take a look at the following resources:
 - [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+
+---
+
+## Features
+
+### AI-Powered Math Tutoring
+
+- Upload a photo of any math problem or draw directly on the whiteboard
+- Multiple teaching modes: Hints, Full Solutions, Concept Explanations, Debugging
+- Conversational history with context-aware follow-ups
+- Text-to-Speech: AI responses are spoken aloud with math-aware pronunciation
+
+### Voice Input
+
+- Hands-free question asking via browser Speech Recognition
+- Continuous listening mode with auto-restart
+- Cancel anytime without submitting
+
+### Persistent Whiteboard
+
+- TLDraw-powered infinite canvas with drawing, text, and shapes
+- Firestore sync for signed-in users (autosave every 800ms)
+- Local-only mode for anonymous users
+- Smart conflict resolution (local vs remote timestamps)
+
+### Board Management
+
+- Create, rename, delete boards
+- Inline rename with keyboard shortcuts (Enter to save, Escape to cancel)
+- Auto-creation of default board for new users
+- "Always add to Canvas" option for automatic response insertion
+
+### Generative Manim
+
+- Turn text prompts into animated math videos
+- Multi-stage pipeline: Script → TTS → Manim → Stitch
+- Local runner (dev) or remote worker (production)
+
+---
 
 ## Data Model
 
@@ -185,7 +233,6 @@ AI responses support Markdown with math rendered via KaTeX. The pipeline is desi
 Debugging math rendering:
 
 - Client: set `localStorage` key `curiosity:debugMath=1` to log raw message, `preprocessMath()` output, and the rendered markdown source.
-- Server: set env var `CURIOSITY_DEBUG_SOLVE=1` to log raw model output and parsed JSON.
 
 ### 2b. Voice Input Flow (client in `src/components/Board.tsx`)
 
@@ -211,6 +258,28 @@ Debugging math rendering:
 
 Note: persistence of Q/A history happens client-side (Firestore when signed in).
 
+### 3b. Speak API (server in `src/app/api/speak/route.ts`)
+
+- **Endpoint**: `POST /api/speak`
+- **Purpose**: Converts text to natural-sounding speech using OpenAI's TTS API
+- **Request Body**:
+  ```json
+  { "text": "The text to convert to speech" }
+  ```
+- **Response**: JSON with base64-encoded audio
+  ```json
+  {
+    "audioBase64": "SUQzBAA...",
+    "speechText": "...",
+    "mimeType": "audio/mpeg"
+  }
+  ```
+- **Features**:
+  - Returns audio as base64 for efficient client-side storage
+  - Uses `tts-1-hd` model with `alloy` voice
+  - Handles rate limiting (429) and auth errors (401)
+  - Speech text is processed through `prepareTextForSpeech()` for math-aware pronunciation
+
 ### 4. Authentication
 
 - **Provider/Context**: `src/context/AuthContext.js` (Client Component) exposes `[user, googleSignIn, logOut]` using Firebase Auth.
@@ -221,11 +290,15 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 ### 5. Client Update (Board)
 
 - Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles. The stack auto-scrolls back to the top on each new response while still allowing manual scroll to older messages. New bubbles animate in and display the detected mode next to the timestamp when available.
-- Each response includes a pre-generated TTS audio payload and a speaker icon for instant playback of the model response, including spoken math content.
-- The speech conversion now preserves a speech-ready transcript with each response.
-- Audio persists per response and can regenerate from the stored speech text if the browser object URL expires after leaving and returning to the board.
-- The response bubble list is persisted locally per-board in `localStorage`.
-- History overlay can be opened to view the entire board conversation; reads `GET /api/boards/[id]`.
+- Each response includes a **speaker icon** for instant playback of the model response
+- **Text-to-Speech Pipeline**:
+  1. AI response is processed by `prepareTextForSpeech()` in `src/components/boardUtils.tsx`
+  2. LaTeX math is converted to spoken form (e.g., `\frac{a}{b}` → "a over b", `x^2` → "x squared")
+  3. OpenAI TTS API generates audio via `/api/speak`
+  4. Audio is stored as base64 and persisted in Firestore/localStorage
+  5. Audio can regenerate from `speechText` if the URL expires
+- The response bubble list is persisted locally per-board in `localStorage`
+- History overlay can be opened to view the entire board conversation; reads from Firestore `users/{uid}/boards/{boardId}/items`
 
 ### 6. Persistence
 
@@ -355,10 +428,15 @@ Notes:
 - `src/components/MyBoardsSidebar.tsx` — Client sidebar listing boards, hover-delete with confirmation, navigation, and open-state persistence.
 - `src/app/board/[id]/page.tsx` — Server page that renders `<Board boardId={id} />`.
 - `src/components/Board.tsx` — Client TLDraw board + AI Panel. Calls `/api/solve`, shows responses, and persists board state/history to Firestore when signed in.
+- `src/components/boardUtils.tsx` — Utility functions for the Board component: speech text preparation (math-to-speech), audio generation, message rendering with KaTeX, and TLDraw bounds calculation.
 - `src/components/board/math.ts` — Client-side math/LaTeX normalization used before rendering AI responses (Markdown + KaTeX).
 - `src/components/board/speechRecognition.ts` — Minimal SpeechRecognition typings + helper to select the browser constructor.
 - `src/components/boards/sidebarUtils.ts` — Pure helper utilities for MyBoardsSidebar (ids, localStorage keys, Firestore snapshot narrowing).
-- `src/app/api/solve/route.ts` — Accepts `image` (+ optional `history`) and calls OpenAI. Stateless (no server-side persistence).
+- `src/app/api/solve/route.ts` — Accepts `image` (+ optional `history`) and calls OpenAI GPT-4o. Stateless (no server-side persistence).
+- `src/app/api/speak/route.ts` — Text-to-speech endpoint using OpenAI TTS. Returns base64-encoded audio.
+- `src/app/api/boards/route.ts` — List/create boards (Firestore-based).
+- `src/app/api/boards/[id]/route.ts` — Get/update/delete specific board.
+- `src/app/api/boards/[id]/doc/route.ts` — TLDraw snapshot persistence endpoint.
 - `src/app/manim/page.tsx` — Generative Manim UI: prompt input, generation state, status polling, logs, and MP4 playback.
 - `src/app/api/manim/start/route.ts` — Starts a Manim generation job (local runner in dev, remote worker on Vercel).
 - `src/app/api/manim/status/route.ts` — Returns job progress (or proxies to worker in remote mode).
@@ -370,5 +448,59 @@ Notes:
 - `src/app/api/history/route.ts` — Legacy sessions endpoint.
 - `src/app/globals.css` — Tailwind setup and theme tokens. Forces light background to avoid dark strips; sets body text color.
 - `src/lib/firebase.ts` — Centralized Firebase initialization and exports (auth, storage, firestore, analytics guarded for SSR).
-- `public/textred.png` — Logo used in the left sidebar and About page.
-- `public/Asset 7.svg` — Sidebar icon used for the collapsed sidebar button.
+- `src/lib/manim/jobs.ts` — In-memory Manim job store (status, step, logs, output paths).
+- `src/lib/manim/runner.ts` — Runner abstraction (local vs remote) and environment-based mode selection.
+- `src/lib/manim/startLocalJob.ts` — Local pipeline runner (OpenAI + Manim CLI + ffmpeg).
+- `mode_detection_rules.txt` — System prompt rules for AI mode detection (hint, solve, explain, debug).
+
+## Environment Variables
+
+Create a `.env.local` file in the project root with the following variables:
+
+### Required
+
+```bash
+# OpenAI API key for AI tutoring and TTS
+OPENAI_API_KEY=sk-...
+
+# Firebase configuration
+NEXT_PUBLIC_FIREBASE_API_KEY=...
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=...
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=...
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
+NEXT_PUBLIC_FIREBASE_APP_ID=...
+NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=...
+```
+
+### Optional (Manim)
+
+```bash
+# Manim runner mode: 'local' for development, 'remote' for Vercel (requires worker)
+MANIM_RUNNER=local
+
+# Remote worker URL (only needed for remote mode)
+MANIM_WORKER_URL=https://your-worker.com
+```
+
+### Optional (Debug)
+
+```bash
+# No debug flags currently implemented
+```
+
+## Dependencies
+
+Key production dependencies:
+
+- `next` — Framework
+- `firebase` — Client SDK (Auth, Firestore, Storage)
+- `firebase-admin` — Server SDK (for future server-side features)
+- `openai` — GPT-4o and TTS APIs
+- `tldraw` — Whiteboard canvas
+- `react-markdown` + `remark-math` + `rehype-katex` — Math rendering
+- `katex` — KaTeX CSS and fonts
+- `react-icons` — Icon library
+- `html-to-image` — Canvas export utilities
+
+See `package.json` for the full list.
