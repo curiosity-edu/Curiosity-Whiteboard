@@ -7,7 +7,7 @@ import path from "node:path";
 // Configure the runtime environment for the API route
 export const runtime = "nodejs";
 // Specify the OpenAI model to use (GPT-4 with vision capabilities)
-const MODEL = "gpt-4o";
+const MODEL = "gpt-5.4-nano";
 
 
 // Shared response format policy used in both image and voice-only flows
@@ -17,16 +17,17 @@ const RESPONSE_FORMAT_POLICY =
   "Never output raw LaTeX commands like \\int, \\mathbf, \\partial, \\nabla, etc. unless they are INSIDE $...$ or $$...$$. " +
   "Do not output partial-math like (a+b)^2 with only part delimited; the ENTIRE expression must be within a single pair of math delimiters. " +
   "If you write LaTeX, keep it minimal and standard (e.g., \\frac{a}{b}, \\sqrt{x}).\n" +
-  "Keep within ~120 words unless the prompt explicitly asks for detailed explanation.\n" +
+  "Keep within ~120 words unless the prompt explicitly requires adetailed explanation.\n" +
   "You will be given prior conversation history as a JSON array of items {question, response}. Use it only as context; do not repeat it.\n" +
   "Return ONLY valid JSON with keys: \n" +
   "- message: <final response text>\n" +
   "- question_text: <your best transcription of the question>\n" +
   "- mode_category: <what mode was detected in this situation>\n" +
   "- session_title (optional): If this seems to be the first message of a new session, provide a short 2-3 word descriptive title (no quotes, title case).";
-async function loadModeDetectionRules(): Promise<string> {
+
+  async function loadModeDetectionRules(): Promise<string> {
   try {
-    const rulesPath = path.join(process.cwd(), "mode_detection_rules.txt");
+    const rulesPath = path.join(process.cwd(), "mode_detection_rules.md");
     const txt = await readFile(rulesPath, "utf8");
     const trimmed = (txt || "").trim();
     return trimmed ? `\n\nMode Detection Rules:\n${trimmed}` : "";

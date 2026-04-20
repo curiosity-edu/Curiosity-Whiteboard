@@ -148,11 +148,12 @@ export function prepareTextForSpeech(text: string): string {
   processed = processed.replace(/\\pm/g, " plus or minus ");
   processed = processed.replace(/\\mp/g, " minus or plus ");
   processed = processed.replace(/\\times/g, " times ");
+  processed = processed.replace(/\\cdot/g, " times ");
   processed = processed.replace(/\\div/g, " divided by ");
-  processed = processed.replace(/\\geq/g, " greater than or equal to ");
-  processed = processed.replace(/\\leq/g, " less than or equal to ");
-  processed = processed.replace(/\\neq/g, " not equal to ");
-  processed = processed.replace(/\\approx/g, " approximately ");
+  processed = processed.replace(/\\geq/g, " is greater than or equal to ");
+  processed = processed.replace(/\\leq/g, " is less than or equal to ");
+  processed = processed.replace(/\\neq/g, " is not equal to ");
+  processed = processed.replace(/\\approx/g, " is approximately ");
   processed = processed.replace(/\\infty/g, " infinity ");
 
   // Remove remaining LaTeX commands and special chars
