@@ -290,7 +290,7 @@ Note: persistence of Q/A history happens client-side (Firestore when signed in).
 ### 5. Client Update (Board)
 
 - Shows AI responses as floating bubbles in the top-right stack (newest first). Each bubble can be added to canvas (`+`) or dismissed (`×`). A **Clear** control clears all bubbles. The stack auto-scrolls back to the top on each new response while still allowing manual scroll to older messages. New bubbles animate in and display the detected mode next to the timestamp when available.
-- Each response includes a **speaker icon** for instant playback of the model response
+- Each response includes a **speaker icon** for instant playback of the model response. The icon toggles to a stop button while playing, allowing you to pause and resume audio from the same position.
 - **Text-to-Speech Pipeline**:
   1. AI response is processed by `prepareTextForSpeech()` in `src/components/boardUtils.tsx`
   2. LaTeX math is converted to spoken form (e.g., `\frac{a}{b}` → "a over b", `x^2` → "x squared")
