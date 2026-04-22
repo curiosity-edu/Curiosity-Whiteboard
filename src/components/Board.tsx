@@ -18,6 +18,8 @@ import { database } from "@/lib/firebase";
 import { doc as fsDoc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { preprocessMath } from "@/components/board/math";
 import { FaVolumeUp } from "react-icons/fa";
+import { FaThumbsUp, FaThumbsDown } from "react-icons/fa6";
+import { FaRegStopCircle } from "react-icons/fa";
 import {
   getSpeechRecognitionCtor,
   type SpeechRecognitionEventLike,
@@ -67,7 +69,9 @@ export default function Board({ boardId }: { boardId: string }) {
     modeCategory?: string;
     responseAudio?: string;
     speechText?: string;
+    feedback?: "up" | "down" | null;
   };
+  const [feedbackMenuOpenId, setFeedbackMenuOpenId] = React.useState<string | null>(null);
   const [aiItems, setAiItems] = React.useState<AIItem[]>([]);
   const aiScrollRef = React.useRef<HTMLDivElement | null>(null);
   type HistoryItem = { question: string; response: string; ts: number };
@@ -205,8 +209,10 @@ export default function Board({ boardId }: { boardId: string }) {
   }, [user]);
 
   // Whether to add AI responses to the canvas as a text shape
+  // For signed-out users, always default to false (don't add to canvas)
   const [addToCanvas, setAddToCanvas] = React.useState<boolean>(() => {
     try {
+      if (!user) return false;
       const v = localStorage.getItem("addToCanvas");
       return v ? v === "true" : false;
     } catch {
@@ -245,11 +251,38 @@ export default function Board({ boardId }: { boardId: string }) {
     setAiItems((prev) => prev.filter((x) => x.id !== id));
   }
 
+  function handleFeedback(id: string, type: "up" | "down") {
+    /**
+     * Handles feedback button clicks.
+     * - Thumbs up: logs to console
+     * - Thumbs down: opens the feedback menu
+     */
+    if (type === "up") {
+      console.log("thumbs up");
+      setAiItems((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, feedback: "up" } : item,
+        ),
+      );
+    } else {
+      setFeedbackMenuOpenId(id);
+    }
+  }
+
+  function handleFeedbackOption(option: string) {
+    /**
+     * Handles feedback option selection from the dropdown menu.
+     */
+    console.log(option);
+    setFeedbackMenuOpenId(null);
+  }
+
   // Text-to-speech state and utilities
   const [playingAudioId, setPlayingAudioId] = React.useState<string | null>(
     null,
   );
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
+  const audioPausedAtRef = React.useRef<Record<string, number>>({});
 
   // Helper to clean math expressions without special logging
 
@@ -259,20 +292,25 @@ export default function Board({ boardId }: { boardId: string }) {
     speechText: string | undefined,
   ) {
     /**
-     * Plays pre-generated audio or stops playback.
+     * Plays pre-generated audio or stops/resumes playback.
      * If responseAudio is missing or invalid, regenerates from speechText.
+     * Clicking while playing stops and saves position; clicking again resumes from that position.
      */
     try {
-      // Pause current audio if any
+      if (playingAudioId === id) {
+        // Stop current playback and save position for resume
+        if (audioRef.current) {
+          audioPausedAtRef.current[id] = audioRef.current.currentTime;
+          audioRef.current.pause();
+        }
+        setPlayingAudioId(null);
+        return;
+      }
+
+      // Stop any currently playing audio
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
-      }
-
-      if (playingAudioId === id) {
-        // Toggle off if already playing this item
-        setPlayingAudioId(null);
-        return;
       }
 
       let url = responseAudio;
@@ -303,9 +341,6 @@ export default function Board({ boardId }: { boardId: string }) {
         return;
       }
 
-      // Attempt to play the audio
-      setPlayingAudioId(id);
-
       // Create and play audio
       if (!audioRef.current) {
         audioRef.current = new Audio();
@@ -314,14 +349,24 @@ export default function Board({ boardId }: { boardId: string }) {
       const audio = audioRef.current;
       audio.src = url;
 
+      // Resume from saved position if available
+      const savedTime = audioPausedAtRef.current[id];
+      if (savedTime && savedTime > 0) {
+        audio.currentTime = savedTime;
+        delete audioPausedAtRef.current[id];
+      }
+
       audio.onended = () => {
         setPlayingAudioId(null);
+        delete audioPausedAtRef.current[id];
       };
 
       audio.onerror = () => {
         setPlayingAudioId(null);
+        delete audioPausedAtRef.current[id];
       };
 
+      setPlayingAudioId(id);
       void audio.play();
     } catch  {
       // [TTS] Playback Error
@@ -1065,7 +1110,7 @@ export default function Board({ boardId }: { boardId: string }) {
               {aiItems.map((item) => (
                 <div
                   key={item.id}
-                  className="curiosity-ai-pop relative w-[280px] max-w-[75vw] rounded-2xl border border-neutral-200 bg-white/95 shadow-sm p-3 pr-12"
+                  className="curiosity-ai-pop relative w-[280px] max-w-[75vw] rounded-2xl border border-neutral-200 bg-white/95 shadow-sm p-3 pr-12 pb-10"
                   role="status"
                   aria-live="polite"
                 >
@@ -1077,6 +1122,33 @@ export default function Board({ boardId }: { boardId: string }) {
                     <div className="curiosity-math-box text-sm text-neutral-900">
                       {renderMessage(item.text)}
                     </div>
+                  </div>
+                  {/* Feedback icons */}
+                  <div className="absolute bottom-2 left-2 flex items-center gap-1">
+                    <button
+                      onClick={() => handleFeedback(item.id, "up")}
+                      className={`text-base p-1 rounded-md transition-colors ${
+                        item.feedback === "up"
+                          ? "text-green-600 bg-green-50"
+                          : "text-neutral-400 hover:text-green-600 hover:bg-green-50"
+                      }`}
+                      title="Helpful"
+                      aria-label="Helpful"
+                    >
+                      <FaThumbsUp />
+                    </button>
+                    <button
+                      onClick={() => handleFeedback(item.id, "down")}
+                      className={`text-base p-1 rounded-md transition-colors ${
+                        item.feedback === "down"
+                          ? "text-red-600 bg-red-50"
+                          : "text-neutral-400 hover:text-red-600 hover:bg-red-50"
+                      }`}
+                      title="Not helpful"
+                      aria-label="Not helpful"
+                    >
+                      <FaThumbsDown />
+                    </button>
                   </div>
                   <button
                     onClick={() =>
@@ -1098,11 +1170,10 @@ export default function Board({ boardId }: { boardId: string }) {
                       playingAudioId === item.id ? "Stop audio" : "Play audio"
                     }
                     disabled={
-                      playingAudioId === item.id ||
                       (!item.responseAudio && !item.speechText)
                     }
                   >
-                    <FaVolumeUp />
+                    {playingAudioId === item.id ? <FaRegStopCircle /> : <FaVolumeUp />}
                   </button>
                   <button
                     onClick={() => addResponseToCanvas(item.text)}
@@ -1120,6 +1191,25 @@ export default function Board({ boardId }: { boardId: string }) {
                   >
                     ×
                   </button>
+                  {/* Feedback menu dropdown */}
+                  {feedbackMenuOpenId === item.id && (
+                    <div className="absolute bottom-8 left-0 z-10 rounded-lg border border-neutral-200 bg-white shadow-lg py-1">
+                      {[
+                        "Not enough help",
+                        "Too much help",
+                        "Irrelevant response",
+                        "Bad explanation/factually wrong",
+                      ].map((option) => (
+                        <button
+                          key={option}
+                          onClick={() => handleFeedbackOption(option)}
+                          className="w-full px-3 py-2 text-left text-xs text-neutral-700 hover:bg-neutral-100"
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

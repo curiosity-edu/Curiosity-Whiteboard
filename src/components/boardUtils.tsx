@@ -68,9 +68,14 @@ export function prepareTextForSpeech(text: string): string {
   processed = processed.replace(/\\sum/g, " summation ");
 
   // Handle basic arithmetic operators (must be after fractions to avoid breaking regex)
+  // Only replace hyphens that are likely minus signs (surrounded by spaces or at word boundaries with numbers)
   processed = processed.replace(/=/g, " equals ");
   processed = processed.replace(/\+/g, " plus ");
-  processed = processed.replace(/-/g, " minus ");
+  // Replace minus signs only in mathematical contexts:
+  // - Hyphens surrounded by whitespace (e.g., "5 - 3")
+  // - Hyphens before numbers at word boundaries (e.g., "-5" at start or after space)
+  processed = processed.replace(/\s+-\s+/g, " minus ");
+  processed = processed.replace(/(^|\s)-(\d)/g, "$1 minus $2");
 
   // Handle superscripts - special cases for small integers, recursive for complex expressions
   processed = processed.replace(/\^\s*\{([^}]*)\}/g, (match, exp) => {
